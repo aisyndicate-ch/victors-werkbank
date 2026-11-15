@@ -68,4 +68,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
-        run: gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --draft --title "$TAG" --notes "To install without git: check the sdist against SHA256SUMS (SECURITY.md, Release files), unpack it and run ./werkbank in the unpacked folder. See CHANGELOG.md."
+          NOTES: >-
+            To install without git: check the sdist against SHA256SUMS
+            (SECURITY.md, Release files), unpack it and run ./werkbank in the
+            unpacked folder. See CHANGELOG.md.
+        run: gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --draft --title "$TAG" --notes "$NOTES"
