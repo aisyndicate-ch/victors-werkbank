@@ -1,0 +1,59 @@
+{
+  "format": "werkbank-thinking-recipes-v1",
+  "families": [
+    {
+      "family": "Qwen3.8",
+      "models": [
+        "qwen/qwen3.8-*",
+        "qwen3.8-*"
+      ],
+      "source": "chat template of Qwen/Qwen3.8-27B-FP8 at revision c3a462cc3d38cf351f3b26cbd763469eeb74ef81 (sha256:af16f654968d47d09a6c604e00370b12dbc21f76456f59c9e98b82e84d9f6375), rendered with these variables: enable_thinking switches thinking, reasoning_effort sets its level in a system line, preserve_thinking keeps earlier reasoning in the history; Qwen/Qwen3.8-Flash-Next is set with the same reasoning_effort levels",
+      "levels": {
+        "off": {
+          "enable_thinking": false
+        },
+        "low": {
+          "enable_thinking": true,
+          "preserve_thinking": true,
+          "reasoning_effort": "low"
+        },
+        "medium": {
+          "enable_thinking": true,
+          "preserve_thinking": true,
+          "reasoning_effort": "medium"
+        },
+        "high": {
+          "enable_thinking": true,
+          "preserve_thinking": true,
+          "reasoning_effort": "high"
+        },
+        "xhigh": {
+          "enable_thinking": true,
+          "preserve_thinking": true,
+          "reasoning_effort": "xhigh"
+        }
+      }
+    },
+    {
+      "family": "Nemotron 3.5",
+      "models": [
+        "nvidia/nvidia-nemotron-3.5-*",
+        "nvidia-nemotron-3.5-*"
+      ],
+      "source": "chat template of nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4 at revision da5b2650a835292c678994a1fa3fb653250fb508 (sha256:1369e90b19976f99ce2070eb21ade8fcb4af640f008e14e82af5c5e89a9cc816): enable_thinking switches thinking, medium_effort asks for efficient reasoning in the last user message; the template has no other level",
+      "levels": {
+        "off": {
+          "enable_thinking": false
+        },
+        "medium": {
+          "enable_thinking": true,
+          "medium_effort": true
+        },
+        "high": {
+          "enable_thinking": true,
+          "medium_effort": false
+        }
+      }
+    }
+  ]
+}

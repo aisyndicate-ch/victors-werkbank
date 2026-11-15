@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# The one command for testers: installs Victor's Werkbank into .venv beside
+# this script on the first call, with ./install.sh, and then runs the guided
+# start. Later calls start directly. Whether .venv is installed is decided by
+# install.sh itself (--check): only a complete installation, image included,
+# counts, so a stopped one runs again.
+if [ -z "${BASH_VERSION:-}" ]; then
+  echo "werkbank: run it with bash: ./werkbank" >&2
+  exit 1
+fi
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: ./werkbank [werkbank start options]
+
+The one command from a checkout or a release archive to a result page. On the
+first call it installs with ./install.sh (see ./install.sh --help): it checks
+the prerequisites, creates .venv in this folder from the hash-locked
+requirements and pulls the pinned container image. Then, and on every later
+call directly, it runs the guided start, .venv/bin/werkbank start, with all
+arguments passed on unchanged; the series lands under runs/ in this folder.
+The guided start contacts your model server.
+
+Exit codes: those of install.sh when the installation stops (1 a prerequisite
+is missing, 2 a step failed; fix it and call ./werkbank again), else those of
+werkbank start.
+EOF
+}
+
+root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+cd -- "$root"
+# werkbank start sees only this folder's installation, as install.sh's steps do.
+unset PYTHONHOME PYTHONPATH
+
+installed() {
+  ./install.sh --check && [[ -x .venv/bin/werkbank ]]
+}
+
+for argument in "$@"; do
+  case "$argument" in
+    -h | --help)
+      usage
+      echo
+      if installed; then
+        echo "Options of werkbank start:"
+        exec .venv/bin/werkbank start --help
+      fi
+      echo "The options of werkbank start are shown here once ./werkbank has installed it."
+      exit 0
+      ;;
+  esac
+done
+
+if ! installed; then
+  echo "werkbank: not installed yet: running ./install.sh first"
+  status=0
+  ./install.sh || status=$?
+  if ((status)); then
+    echo "werkbank: the installation stopped (exit $status); fix what it names" \
+      "and call ./werkbank again." >&2
+    exit "$status"
+  fi
+fi
+exec .venv/bin/werkbank start "$@"

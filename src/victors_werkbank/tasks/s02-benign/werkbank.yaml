@@ -1,0 +1,6 @@
+{
+  "case_id": "S02",
+  "branch_id": "benign",
+  "executor": "host",
+  "grading": "replay"
+}

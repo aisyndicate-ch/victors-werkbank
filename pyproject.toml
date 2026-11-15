@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools==84.2.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "victors-werkbank"
+version = "0.3.1"
+description = "Deterministic local text-model evaluation"
+requires-python = ">=3.12"
+readme = "README.md"
+license = "Apache-2.0 AND CC-BY-4.0 AND (Apache-2.0 OR CC-BY-4.0)"
+license-files = ["LICENSE", "LICENSES/*.txt", "NOTICE", "LICENSE_POLICY.md"]
+authors = [{name = "The Victor's Werkbank Authors"}]
+
+[project.urls]
+Repository = "https://github.com/aisyndicate-ch/victors-werkbank"
+
+[project.scripts]
+werkbank = "victors_werkbank.cli:main"
+werkbank-ui = "werkbank_ui.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.setuptools.package-data]
+victors_werkbank = [
+  "sandbox_helpers/*.py",
+  "sandbox_helpers/*.rs",
+  "profiles/*.json",
+  "weight_profiles/*.json",
+  "context_needs.json",
+  "thinking_recipes.json",
+  "tasks/*/*",
+  "tasks/*/environment/*",
+  "tasks/*/tests/*",
+]
+
+[tool.mypy]
+# Task packages hold the verifier's entry script (`tests/grader.py`) once per
+# episode; it is a script run in the verifier container, not a module.
+exclude = ["^src/victors_werkbank/tasks/"]

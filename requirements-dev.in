@@ -1,0 +1,10 @@
+# Development tools; the runtime (Harbor) is pinned in requirements-harbor.txt.
+jsonschema==4.26.0
+ruff==0.14.0
+# Matches the Harbor lock, so both install into one environment (Python 3.12+).
+typing-extensions==4.16.0
+# Package build and static checking.
+build==1.6.1
+setuptools==84.2.1
+wheel==0.48.0
+mypy==1.18.2

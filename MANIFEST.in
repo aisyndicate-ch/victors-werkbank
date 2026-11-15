@@ -1,0 +1,13 @@
+include CHANGELOG.md CITATION.cff LICENSE LICENSE_POLICY.md NOTICE
+include SECURITY.md install.sh werkbank
+include docker/runtime/Dockerfile
+recursive-include LICENSES *.txt
+include requirements-dev.in requirements-dev.txt requirements-harbor.in requirements-harbor.txt
+recursive-include schemas *.json
+recursive-include examples *.json
+include docs/README.md docs/INSTALLATION.md docs/FAQ.md docs/TASKS.md
+include docs/METHODOLOGY.md docs/SUBMISSION.md docs/DATASHEET.md
+recursive-include docs/users *.md
+recursive-include profiles *.json
+
+include requirements-harbor-build.in requirements-harbor-build.txt

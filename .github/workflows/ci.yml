@@ -1,0 +1,75 @@
+name: Repository CI
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: repo-ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  installation:
+    # The tree installs, starts and builds as its installation page says.
+    # A draft pull request is not checked until it is marked ready.
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      HARBOR_TELEMETRY: "off"
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - name: Install the development tools and the pinned runtime
+        run: |
+          python3 -m venv .venv
+          . .venv/bin/activate
+          .venv/bin/python -m pip install --require-hashes --index-url https://pypi.org/simple -r requirements-dev.txt
+          .venv/bin/python -m pip install --require-hashes -r requirements-harbor-build.txt
+          .venv/bin/python -m pip install --no-build-isolation --require-hashes -r requirements-harbor.txt
+      - name: Install package without network build dependencies
+        run: .venv/bin/python -m pip install --no-deps --no-build-isolation -e .
+      - name: Check the installation
+        run: |
+          .venv/bin/werkbank doctor --offline
+          .venv/bin/werkbank-ui --help
+      - name: Lint, check formatting and types
+        run: |
+          .venv/bin/python -m ruff check src/
+          .venv/bin/python -m ruff format --check src/
+          .venv/bin/python -m mypy --check-untyped-defs src
+      - name: Build distributions
+        run: .venv/bin/python -m build --no-isolation
+      - name: Verify clean wheel installation
+        run: |
+          python3 -m venv "$RUNNER_TEMP/werkbank-wheel"
+          "$RUNNER_TEMP/werkbank-wheel/bin/python" -m pip install --no-index --no-deps dist/*.whl
+          "$RUNNER_TEMP/werkbank-wheel/bin/werkbank" doctor --offline
+          "$RUNNER_TEMP/werkbank-wheel/bin/werkbank-ui" --help
+      - name: Check patch whitespace
+        run: git show --format= --check HEAD
+  repository-checks:
+    if: always()
+    needs: [installation]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    steps:
+      - name: Require every job
+        env:
+          RESULT: ${{ needs.installation.result }}
+        run: |
+          if [ "$RESULT" = skipped ]; then
+            echo "Draft: CI runs when the pull request is marked ready." >&2
+            exit 1
+          fi
+          test "$RESULT" = success

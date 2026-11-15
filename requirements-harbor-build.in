@@ -1,0 +1,4 @@
+# Build tools only; install before runtime with --no-build-isolation.
+uv_build>=0.8.4,<0.9.0
+setuptools==84.2.1
+wheel==0.48.0

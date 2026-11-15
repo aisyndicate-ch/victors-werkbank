@@ -1,0 +1,47 @@
+name: Question
+description: Ask about your results or how to use Werkbank
+body:
+  - type: markdown
+    attributes:
+      value: |
+        [Reading your results](https://github.com/aisyndicate-ch/victors-werkbank/blob/main/docs/users/READING_RESULTS.md)
+        explains every status, reason and group a result page shows, and the
+        [command reference](https://github.com/aisyndicate-ch/victors-werkbank/blob/main/docs/users/CLI.md)
+        every command. Ask about what they leave open. Do not post credentials,
+        endpoint addresses or private model inputs.
+  - type: dropdown
+    id: topic
+    attributes:
+      label: Topic
+      options:
+        - Results (a result page, a report or an evaluation)
+        - Installation
+        - Running against a server
+        - Submitting results
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: What you ran and what you saw
+      description: >-
+        The command, with the endpoint address replaced by ENDPOINT and any
+        credential removed, and the part of the result page, report or output the
+        question is about.
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `werkbank doctor --offline`
+      description: >-
+        It prints this build's version, its harness digest and your platform, and
+        contacts nothing.
+      render: json
+    validations:
+      required: true

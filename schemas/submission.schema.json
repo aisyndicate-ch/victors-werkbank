@@ -1,0 +1,236 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:werkbank:submission:1.0.0",
+  "title": "Submission envelope (submission.json, werkbank submit)",
+  "description": "The first member of a submission archive (docs/SUBMISSION.md): the submitting build, the evaluation by format and digest, the case set, the evaluated runs, the answers to the questionnaire, the consent shown and whether raw data is included, and every other member by path, size and digest. No free text, no time stamp, no local path, host name or endpoint.",
+  "type": "object",
+  "properties": {
+    "format": {
+      "const": "werkbank-submission-v1"
+    },
+    "installation_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$",
+      "description": "16 random bytes in hexadecimal, stored on the submitting computer"
+    },
+    "werkbank": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "harness_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "harness_sha256",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "evaluation": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "type": "string",
+          "minLength": 1,
+          "description": "As evaluation.json states it; the submission format does not fix an evaluation format"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "SHA-256 of evaluation.json"
+        }
+      },
+      "required": [
+        "format",
+        "sha256"
+      ],
+      "additionalProperties": false
+    },
+    "case_set": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The registered case set whose list holds exactly case_ids, or null"
+        },
+        "case_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Z]{1,2}[0-9]{2}$"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "case_ids",
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "runs": {
+      "type": "array",
+      "description": "One entry per evaluated run, in the evaluation's order, as its inputs record them",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "plan_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "run_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "plan_sha256",
+          "run_id",
+          "run_sha256"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "answers": {
+      "type": "object",
+      "description": "The chosen choice ID per question, null when skipped",
+      "properties": {
+        "format": {
+          "const": "werkbank-questions-v1"
+        },
+        "purpose": {
+          "enum": [
+            "choose_model",
+            "compare_setup",
+            "check_server",
+            "curiosity",
+            "other",
+            null
+          ]
+        },
+        "setup": {
+          "enum": [
+            "smooth",
+            "minor_problems",
+            "major_problems",
+            null
+          ]
+        },
+        "duration": {
+          "enum": [
+            "fine",
+            "long_but_ok",
+            "too_long",
+            null
+          ]
+        },
+        "clarity": {
+          "enum": [
+            "clear",
+            "partly",
+            "unclear",
+            null
+          ]
+        },
+        "plausibility": {
+          "enum": [
+            "yes",
+            "partly",
+            "no",
+            "no_experience",
+            null
+          ]
+        }
+      },
+      "required": [
+        "clarity",
+        "duration",
+        "format",
+        "plausibility",
+        "purpose",
+        "setup"
+      ],
+      "additionalProperties": false
+    },
+    "consent": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "enum": [
+            "werkbank-consent-v1",
+            "werkbank-consent-v2"
+          ],
+          "description": "The consent text shown: this build shows werkbank-consent-v2; submissions of earlier builds carry werkbank-consent-v1"
+        },
+        "raw_data": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "raw_data",
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "files": {
+      "type": "array",
+      "description": "Every other member, sorted by path",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^(evaluation|result|raw)/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$",
+            "maxLength": 100
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "bytes",
+          "path",
+          "sha256"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "answers",
+    "case_set",
+    "consent",
+    "evaluation",
+    "files",
+    "format",
+    "installation_id",
+    "runs",
+    "werkbank"
+  ],
+  "additionalProperties": false
+}

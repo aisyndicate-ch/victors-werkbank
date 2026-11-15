@@ -1,0 +1,5 @@
+# The runtime: pinned Harbor (Python 3.12+), installed next to requirements-dev.txt.
+harbor @ https://github.com/harbor-framework/harbor/archive/36232c205abfa42a5df4eee664e36dab0908acb6.tar.gz
+# filelock 4.2.1 or later fixes its lock-file advisories; litellm releases from
+# 1.104 cap filelock below 4, so litellm stays below 1.104 until that cap goes.
+litellm<1.104

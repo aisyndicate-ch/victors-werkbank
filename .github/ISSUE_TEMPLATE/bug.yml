@@ -1,0 +1,54 @@
+name: Bug report
+description: Report a reproducible defect
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The two outputs below tell the maintainer which build and which server setup
+        the problem happened on. Neither shows your endpoint address, a model
+        response or a credential. Do not post credentials or private model inputs.
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: >-
+        The command you ran and its exit code, with the endpoint address replaced by
+        ENDPOINT and any credential removed.
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `werkbank doctor --offline`
+      description: >-
+        It prints this build's version, its harness digest and your platform, and
+        contacts nothing.
+      render: json
+    validations:
+      required: true
+  - type: textarea
+    id: preflight
+    attributes:
+      label: Output of `werkbank preflight`
+      description: >-
+        Needed for any problem during `werkbank start` or `werkbank run`. Run it
+        with the endpoint arguments of the command that failed (`--endpoint`,
+        `--model`, `--max-tokens-per-call` and any sampling flag). It contacts the
+        model with at most two chat requests, so it needs the same permission as a
+        run, and it writes no file. Paste the output also when it reports a failure.
+        Leave this empty for a problem before any server is involved.
+      render: text
+  - type: textarea
+    id: more
+    attributes:
+      label: Anything else
+      description: >-
+        Redacted logs, the report of the run, or the output of
+        `werkbank harbor-doctor` for a problem with Docker or the container image.

@@ -1,0 +1,6 @@
+{
+  "case_id": "C08",
+  "branch_id": "default",
+  "executor": "code",
+  "grading": "replay"
+}

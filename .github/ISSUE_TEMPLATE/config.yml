@@ -1,0 +1,7 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security problem
+    url: https://github.com/aisyndicate-ch/victors-werkbank/security/advisories/new
+    about: >-
+      Report a vulnerability privately through the Security tab, never in a public
+      issue. SECURITY.md also names an e-mail contact.

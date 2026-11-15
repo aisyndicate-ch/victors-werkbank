@@ -1,0 +1,12 @@
+{
+  "schema_version": "0.1.0",
+  "run_id": "synthetic-contract-example",
+  "case_id": "A06",
+  "sequence": 1,
+  "elapsed_seconds": 1,
+  "kind": "verification",
+  "payload": {
+    "strict_success": 1
+  },
+  "trust": "trusted_verifier"
+}
