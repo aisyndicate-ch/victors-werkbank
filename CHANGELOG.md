@@ -16,7 +16,7 @@ that is named but not yet published carries `Unreleased` in place of its date.
 
 ## [Unreleased]
 
-## [0.3.1] - 2026-11-15
+## [0.3.1] - 2026-11-16
 
 The first public version.
 

@@ -1,0 +1,189 @@
+"""Independent implementation of read_file() per SPEC.md (static files).
+
+Standard library only. Nothing is written to stdout or to disk. Every outcome
+that is not a served text raises NotServed, a ValueError subclass.
+"""
+
+import os
+import stat
+
+__all__ = ["NotServed", "read_file"]
+
+MAX_LINKS = 8
+_HEX = frozenset("0123456789abcdefABCDEF")
+_SKIPPED = ("", ".")
+_SITE = object()  # identity of the site area (mount areas are keyed by name)
+
+
+def _target(raw):
+    """Split a link's stored target into (mount, rest): "@name:rest" with a
+    non-empty name moves to that mount's area; anything else is a plain
+    target, walked as it is stored."""
+    if raw.startswith("@"):
+        name, colon, rest = raw[1:].partition(":")
+        if colon and name:
+            return name, rest
+    return None, raw
+
+
+class NotServed(ValueError):
+    """The request names no file, or the file is not served."""
+
+
+def _decode(path):
+    """Percent-decode the request in one pass; return the decoded text."""
+    if not isinstance(path, str) or not path:
+        raise NotServed("path must be a non-empty str")
+    raw = bytearray()
+    i = 0
+    n = len(path)
+    while i < n:
+        ch = path[i]
+        if ch == "%":
+            digits = path[i + 1 : i + 3]
+            if len(digits) != 2 or digits[0] not in _HEX or digits[1] not in _HEX:
+                raise NotServed("malformed percent escape")
+            raw.append(int(digits, 16))
+            i += 3
+            continue
+        try:
+            raw += ch.encode("utf-8")
+        except UnicodeEncodeError:
+            # A lone surrogate in the str cannot stand for any UTF-8 bytes.
+            raise NotServed("character not encodable as UTF-8") from None
+        i += 1
+    try:
+        text = bytes(raw).decode("utf-8")
+    except UnicodeDecodeError:
+        raise NotServed("decoded bytes are not valid UTF-8") from None
+    if text.startswith("/"):
+        raise NotServed("decoded path starts with '/'")
+    if text.endswith("/"):
+        raise NotServed("decoded path ends with '/'")
+    return text
+
+
+def _directory_top(entry):
+    """The directory `entry` leads to as the host resolves it, else None."""
+    try:
+        top = os.path.realpath(entry, strict=True)
+        if stat.S_ISDIR(os.stat(top).st_mode):
+            return top
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def _name_bytes(component):
+    # Request components are valid Unicode (plain UTF-8); link-target
+    # components were decoded with surrogateescape and round-trip exactly.
+    return component.encode("utf-8", "surrogateescape")
+
+
+def _read_text(entry):
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_NOCTTY | os.O_CLOEXEC
+    try:
+        fd = os.open(entry, flags)
+    except (OSError, ValueError):
+        raise NotServed("file cannot be opened") from None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise NotServed("not a regular file")
+        chunks = []
+        while True:
+            chunk = os.read(fd, 1 << 16)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    except OSError:
+        raise NotServed("file cannot be read") from None
+    finally:
+        os.close(fd)
+    try:
+        return b"".join(chunks).decode("utf-8")
+    except UnicodeDecodeError:
+        raise NotServed("file is not valid UTF-8") from None
+
+
+def read_file(root, path, mounts=()):
+    text = _decode(path)
+
+    try:
+        root_bytes = os.fsencode(root)
+    except (TypeError, ValueError):
+        raise NotServed("root is not a path") from None
+    site_top = _directory_top(root_bytes)
+    if site_top is None:
+        raise NotServed("root leads to no directory")
+
+    areas = {}
+    for name in mounts:
+        if not isinstance(name, str) or name in areas:
+            continue
+        try:
+            entry = root_bytes + b"/" + os.fsencode(name)
+        except (TypeError, ValueError):
+            continue
+        top = _directory_top(entry)
+        if top is not None:
+            areas[name] = top
+
+    area = _SITE
+    top = site_top
+    position = []  # directory names (bytes) below `top`
+    links = 0
+    pending = text.split("/")
+    pending.reverse()  # a stack: the next component is at the end
+
+    while pending:
+        component = pending.pop()
+        if component in _SKIPPED:
+            continue
+        if component == "..":
+            if position:
+                position.pop()
+            continue
+        if area is _SITE and not position and component in areas:
+            area = component
+            top = areas[component]
+            position = []
+            continue
+
+        name = _name_bytes(component)
+        entry = os.path.join(top, *position, name)
+        try:
+            mode = os.lstat(entry).st_mode
+        except (OSError, ValueError):
+            raise NotServed("name not found") from None
+
+        if stat.S_ISDIR(mode):
+            position.append(name)
+        elif stat.S_ISLNK(mode):
+            links += 1
+            if links > MAX_LINKS:
+                raise NotServed("too many links")
+            try:
+                stored = os.readlink(entry)
+            except (OSError, ValueError):
+                raise NotServed("link cannot be read") from None
+            mount, rest = _target(stored.decode("utf-8", "surrogateescape"))
+            if mount is None:
+                if rest.startswith("/"):
+                    position = []
+            else:
+                if mount not in areas:
+                    raise NotServed("link names a mount without an area")
+                area = mount
+                top = areas[mount]
+                position = []
+            parts = rest.split("/")
+            parts.reverse()
+            pending.extend(parts)
+        elif stat.S_ISREG(mode):
+            if any(part not in _SKIPPED for part in pending):
+                raise NotServed("components left after a regular file")
+            return _read_text(entry)
+        else:
+            raise NotServed("not a directory, link or regular file")
+
+    raise NotServed("walk did not end on a regular file")

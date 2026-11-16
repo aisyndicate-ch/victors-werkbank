@@ -18,9 +18,10 @@ Python and container backend. A combination that is not listed is not supported.
 | macOS | any | any | any | Not supported | [Not supported](#not-supported-macos-and-native-windows) |
 | Windows, native | any | any | any | Not supported; use [WSL2](#wsl2) | [Not supported](#not-supported-macos-and-native-windows) |
 
-- "Continuous integration" is the maintainers': it runs Werkbank's test suite
-  against this tree before a release. The tests are not part of this repository,
-  whose own workflow checks that the tree installs, starts and builds.
+- "Continuous integration" is this repository's own workflow: on every pull
+  request and on request it checks that the tree installs, starts and builds, and
+  it runs Werkbank's test suite, the cases in containers included. The maintainers
+  run the same suite on this tree before a release.
 - Docker Desktop with its WSL2 backend is untested. The tested route is Docker
   Engine installed inside the WSL2 distribution.
 - The Python column names the system Python a row was tested with. No row covers

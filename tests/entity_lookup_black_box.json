@@ -1,0 +1,48 @@
+[
+ [
+  [
+   "lookup_ship",
+   {
+    "name": "Ardent Tern"
+   }
+  ],
+  [
+   "lookup_shipowner",
+   {
+    "name": "Ardent Tern"
+   }
+  ],
+  [
+   "lookup_port",
+   {
+    "name": "Ellery"
+   }
+  ]
+ ],
+ [
+  [
+   "record_reference",
+   {
+    "role": "ship",
+    "source": "lookup_ship",
+    "id": "R-58119"
+   }
+  ],
+  [
+   "record_reference",
+   {
+    "role": "owner",
+    "source": "lookup_shipowner",
+    "id": "R-61927"
+   }
+  ],
+  [
+   "record_reference",
+   {
+    "role": "port",
+    "source": "lookup_port",
+    "id": "R-52873"
+   }
+  ]
+ ]
+]

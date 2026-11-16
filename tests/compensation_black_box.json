@@ -1,0 +1,190 @@
+[
+ [
+  "inspect",
+  {
+   "resource": "manual"
+  }
+ ],
+ [
+  "inspect",
+  {
+   "resource": "source:compat"
+  }
+ ],
+ [
+  "inspect",
+  {
+   "resource": "source:backfill"
+  }
+ ],
+ [
+  "inspect",
+  {
+   "resource": "log:backfill"
+  }
+ ],
+ [
+  "inspect",
+  {
+   "resource": "job"
+  }
+ ],
+ [
+  "inspect",
+  {
+   "resource": "metrics"
+  }
+ ],
+ [
+  "inspect",
+  {
+   "resource": "sample"
+  }
+ ],
+ [
+  "inspect",
+  {
+   "resource": "log:partner"
+  }
+ ],
+ [
+  "inspect",
+  {
+   "resource": "log:api"
+  }
+ ],
+ [
+  "configure",
+  {
+   "setting": "no_unit",
+   "value": "major-comma"
+  }
+ ],
+ [
+  "backfill",
+  {
+   "mode": "range",
+   "first": "k-05",
+   "last": "k-06"
+  }
+ ],
+ [
+  "backfill",
+  {
+   "mode": "range",
+   "first": "k-22",
+   "last": "k-33"
+  }
+ ],
+ [
+  "configure",
+  {
+   "setting": "search_index",
+   "value": "v2"
+  }
+ ],
+ [
+  "backfill",
+  {
+   "mode": "range",
+   "first": "k-43",
+   "last": "k-49"
+  }
+ ],
+ [
+  "deploy",
+  {
+   "service": "billing",
+   "build": "billing-5"
+  }
+ ],
+ [
+  "inspect",
+  {
+   "resource": "job"
+  }
+ ],
+ [
+  "inspect",
+  {
+   "resource": "metrics"
+  }
+ ],
+ [
+  "inspect",
+  {
+   "resource": "log:api"
+  }
+ ],
+ [
+  "inspect",
+  {
+   "resource": "log:backfill"
+  }
+ ],
+ [
+  "backfill",
+  {
+   "mode": "range",
+   "first": "k-29",
+   "last": "k-30"
+  }
+ ],
+ [
+  "inspect",
+  {
+   "resource": "log:api"
+  }
+ ],
+ [
+  "switch",
+  {
+   "service": "billing",
+   "format": "v2"
+  }
+ ],
+ [
+  "deploy",
+  {
+   "service": "search",
+   "build": "search-3"
+  }
+ ],
+ [
+  "switch",
+  {
+   "service": "api",
+   "format": "v2"
+  }
+ ],
+ [
+  "inspect",
+  {
+   "resource": "metrics"
+  }
+ ],
+ [
+  "probe",
+  {
+   "workload": "billing"
+  }
+ ],
+ [
+  "probe",
+  {
+   "workload": "search"
+  }
+ ],
+ [
+  "probe",
+  {
+   "workload": "partner"
+  }
+ ],
+ [
+  "notify",
+  {
+   "recipient": "partner"
+  }
+ ]
+]

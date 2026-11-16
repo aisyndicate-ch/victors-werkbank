@@ -1,0 +1,134 @@
+{
+ "_comment": "Records of serving format werkbank-serving-v4, written by the build that wrote that format; the reader keeps them valid with the same identity.",
+ "records": {
+  "sglang": {
+   "configuration": {
+    "harness_sha256": "abababababababababababababababababababababababababababababababab",
+    "max_tokens_per_call": 65536,
+    "sampling": {
+     "chat_template_kwargs": {
+      "enable_thinking": false
+     },
+     "temperature": 1
+    },
+    "streaming": false
+   },
+   "engine": {
+    "context_tokens": 262144,
+    "kv_cache_dtype": "fp8_e4m3",
+    "model_path": {
+     "basename": "qwen-local",
+     "sha256": "126f699b1017f675be449f817f9ccbe9fff237423b978307e1a2c491d4500ed6"
+    },
+    "quantization": "fp8",
+    "reason": null,
+    "runtime": "sglang",
+    "speculative_decoding": "EAGLE",
+    "version": "0.5.3"
+   },
+   "format": "werkbank-serving-v4",
+   "hardware_class": null,
+   "host": {
+    "accelerators": null,
+    "label": null,
+    "reason": "not probed"
+   },
+   "identity": {
+    "complete": false,
+    "conflicts": [],
+    "missing": [
+     "accelerator",
+     "accelerator_memory_gib",
+     "chat_template",
+     "compute_runtime",
+     "driver_version",
+     "kv_cache_dtype",
+     "memory_type",
+     "model_revision",
+     "quantization",
+     "serving_host_os",
+     "speculative_decoding",
+     "tool_call_parser"
+    ],
+    "sha256": "b915bb0d3adad4e8331dec186a8ce2f86838d1433a7a7916b84a8c2aabb8ea4b"
+   },
+   "models": {
+    "entry": {
+     "id": "qwen-local",
+     "max_model_len": 262144,
+     "owned_by": "sglang",
+     "parent": null,
+     "root": {
+      "basename": "qwen-local",
+      "sha256": "126f699b1017f675be449f817f9ccbe9fff237423b978307e1a2c491d4500ed6"
+     }
+    },
+    "listed": 1,
+    "reason": null
+   },
+   "owner_note": null
+  },
+  "vllm": {
+   "configuration": {
+    "harness_sha256": "abababababababababababababababababababababababababababababababab",
+    "max_tokens_per_call": 65536,
+    "sampling": {
+     "temperature": 0
+    },
+    "streaming": false
+   },
+   "engine": {
+    "context_tokens": null,
+    "kv_cache_dtype": null,
+    "model_path": null,
+    "quantization": null,
+    "reason": null,
+    "runtime": "vllm",
+    "speculative_decoding": null,
+    "version": "0.11.0"
+   },
+   "format": "werkbank-serving-v4",
+   "hardware_class": "128gb-unified",
+   "host": {
+    "accelerators": null,
+    "label": null,
+    "reason": "not probed"
+   },
+   "identity": {
+    "complete": true,
+    "conflicts": [],
+    "missing": [],
+    "sha256": "ea56ccba55312637bff39b53eeb70888411e219c8d27444d62256288ab621a1a"
+   },
+   "models": {
+    "entry": {
+     "id": "qwen-local",
+     "max_model_len": 262144,
+     "owned_by": "vllm",
+     "parent": null,
+     "root": {
+      "basename": "qwen-local",
+      "sha256": "126f699b1017f675be449f817f9ccbe9fff237423b978307e1a2c491d4500ed6"
+     }
+    },
+    "listed": 1,
+    "reason": null
+   },
+   "owner_note": {
+    "accelerator": "NVIDIA GB10",
+    "accelerator_memory_gib": 128,
+    "chat_template": "model default",
+    "compute_runtime": "CUDA 13.0",
+    "driver_version": "580.95",
+    "format": "werkbank-serving-note-v2",
+    "kv_cache_dtype": "fp8_e4m3",
+    "memory_type": "unified",
+    "model_revision": "0123456789abcdef0123456789abcdef01234567",
+    "quantization": "bf16",
+    "serving_host_os": "Ubuntu 24.04",
+    "speculative_decoding": "none",
+    "tool_call_parser": "hermes"
+   }
+  }
+ }
+}

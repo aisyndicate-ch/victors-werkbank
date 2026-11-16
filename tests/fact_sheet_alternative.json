@@ -1,0 +1,8 @@
+[
+  [["read", {"resource": "policy"}], ["read", {"resource": "request"}], ["read", {"resource": "records"}]],
+  [["publish", {"fact": "containers_aboard", "status": "settled", "value": "46", "records": ["S-1"]}]],
+  [["publish", {"fact": "struck_at", "status": "settled", "value": "23:42", "records": ["L-1"]}], ["read", {"resource": "inbox"}]],
+  [["publish", {"fact": "dangerous_units", "status": "settled", "value": "7", "records": ["C-9"]}]],
+  [["publish", {"fact": "containers_lost", "status": "open", "value": "none", "records": ["L-6", "S-6"]}], ["read", {"resource": "inbox"}]],
+  [["publish", {"fact": "draught_m", "status": "settled", "value": "3.2", "records": ["H-10"]}], ["publish", {"fact": "gate_leaves_damaged", "status": "settled", "value": "2", "records": ["H-8", "L-5"]}], ["publish", {"fact": "reopens", "status": "settled", "value": "2026-06-12", "records": ["L-3"]}]]
+]

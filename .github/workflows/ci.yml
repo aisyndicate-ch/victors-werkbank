@@ -10,11 +10,12 @@ concurrency:
   cancel-in-progress: true
 jobs:
   installation:
-    # The tree installs, starts and builds as its installation page says.
-    # A draft pull request is not checked until it is marked ready.
+    # The tree installs, starts and builds as its installation page says, and
+    # its test suite passes. A draft pull request is not checked until it is
+    # marked ready.
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 90
     env:
       HARBOR_TELEMETRY: "off"
     strategy:
@@ -45,9 +46,13 @@ jobs:
           .venv/bin/werkbank-ui --help
       - name: Lint, check formatting and types
         run: |
-          .venv/bin/python -m ruff check src/
-          .venv/bin/python -m ruff format --check src/
+          .venv/bin/python -m ruff check tests/ src/
+          .venv/bin/python -m ruff format --check tests/ src/
           .venv/bin/python -m mypy --check-untyped-defs src
+      - name: Run the test suite
+        # Without Docker: the tests that run cases in containers skip here and
+        # run in the two jobs below.
+        run: .venv/bin/python -m unittest discover -s tests
       - name: Build distributions
         run: .venv/bin/python -m build --no-isolation
       - name: Verify clean wheel installation
@@ -58,18 +63,88 @@ jobs:
           "$RUNNER_TEMP/werkbank-wheel/bin/werkbank-ui" --help
       - name: Check patch whitespace
         run: git show --format= --check HEAD
+  harbor-integration:
+    # Host cases as Harbor trials in the pinned image, with a fake endpoint.
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      HARBOR_TELEMETRY: "off"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-harbor*.txt
+      - name: Install the pinned runtime
+        run: |
+          python -m venv .venv
+          . .venv/bin/activate
+          .venv/bin/python -m pip install --require-hashes -r requirements-harbor-build.txt
+          .venv/bin/python -m pip install --no-build-isolation --require-hashes -r requirements-harbor.txt
+          .venv/bin/python -m pip install --no-build-isolation --no-deps .
+      - name: Prepare pinned CPU-only test image
+        run: docker pull ghcr.io/aisyndicate-ch/werkbank-runtime@sha256:2c57f1598aa42b357d8220880591ca5c09939621ed5c12d12c05a1f6c0521f36
+      - name: Run actual M02 with fake endpoint and closed-endpoint regrade
+        run: |
+          .venv/bin/werkbank harbor-doctor
+          .venv/bin/werkbank harbor-smoke --output "$RUNNER_TEMP/werkbank-harbor-smoke"
+      - name: Run host cases as Harbor trials with export, regrade and evidence controls
+        env:
+          WERKBANK_HARBOR_DOCKER: "1"
+          WERKBANK_HARBOR_EVIDENCE: ${{ runner.temp }}/werkbank-harbor-adapter
+        run: .venv/bin/python -m unittest discover -s tests -p test_harbor_adapter.py -k adapter.TrialsWithDocker -v
+  harbor-code:
+    # Code cases as Harbor trials, and their controls in the container executor.
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      HARBOR_TELEMETRY: "off"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-harbor*.txt
+      - name: Install the pinned runtime
+        run: |
+          python -m venv .venv
+          . .venv/bin/activate
+          .venv/bin/python -m pip install --require-hashes -r requirements-harbor-build.txt
+          .venv/bin/python -m pip install --no-build-isolation --require-hashes -r requirements-harbor.txt
+          .venv/bin/python -m pip install --no-build-isolation --no-deps .
+      - name: Prepare pinned CPU-only test image
+        run: docker pull ghcr.io/aisyndicate-ch/werkbank-runtime@sha256:2c57f1598aa42b357d8220880591ca5c09939621ed5c12d12c05a1f6c0521f36
+      - name: Run code cases as Harbor trials with regrade and a forged submission
+        env:
+          WERKBANK_HARBOR_DOCKER: "1"
+          WERKBANK_HARBOR_EVIDENCE: ${{ runner.temp }}/werkbank-harbor-code
+        run: .venv/bin/python -m unittest discover -s tests -p test_harbor_adapter.py -k CodeTrialsWithDocker -v
+      - name: Run code-case controls through the container executor
+        env:
+          WERKBANK_HARBOR_DOCKER: "1"
+        run: .venv/bin/python -m unittest discover -s tests -p test_container_controls.py -v
   repository-checks:
     if: always()
-    needs: [installation]
+    needs: [installation, harbor-integration, harbor-code]
     runs-on: ubuntu-24.04
     timeout-minutes: 1
     steps:
       - name: Require every job
         env:
-          RESULT: ${{ needs.installation.result }}
+          RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
-          if [ "$RESULT" = skipped ]; then
-            echo "Draft: CI runs when the pull request is marked ready." >&2
-            exit 1
-          fi
-          test "$RESULT" = success
+          for result in $RESULTS; do
+            if [ "$result" = skipped ]; then
+              echo "Draft: CI runs when the pull request is marked ready." >&2
+              exit 1
+            fi
+            test "$result" = success
+          done
