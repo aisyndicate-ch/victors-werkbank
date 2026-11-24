@@ -6,6 +6,11 @@ updates:
     groups:
       codeql-action:
         patterns: ["github/codeql-action/*"]
+    # The image of scorecard-action 2.6.0 fails to pull on GitHub's runners
+    # ("manifest unknown"), so that version is skipped.
+    ignore:
+      - dependency-name: ossf/scorecard-action
+        versions: ["2.6.0"]
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
