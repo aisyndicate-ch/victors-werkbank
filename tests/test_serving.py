@@ -48,6 +48,7 @@ from victors_werkbank.serving import (
     SERVING_FORMAT,
     SERVING_FORMAT_V3,
     SERVING_FORMAT_V4,
+    SERVING_FORMAT_V5,
     VERSION_BYTES,
     collect_serving,
     context_tokens,
@@ -198,6 +199,57 @@ def llamacpp_models(model="qwen3-32b-q4_k_m.gguf"):
             }
         ],
     }
+
+
+def ollama_models(model="qwen3:8b", namespace="library"):
+    """GET /v1/models as Ollama reports it: the model's namespace as owner."""
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": model,
+                "object": "model",
+                "created": int(time.time()),
+                "owned_by": namespace,
+            }
+        ],
+    }
+
+
+def lmstudio_models(model="qwen/qwen3-8b"):
+    """GET /v1/models as LM Studio reports it."""
+    return {
+        "object": "list",
+        "data": [{"id": model, "object": "model", "owned_by": "organization_owner"}],
+    }
+
+
+def lmstudio_model(key="qwen/qwen3-8b", loaded=(), **changes):
+    """One model of LM Studio's GET /api/v1/models, loaded under the given
+    instance IDs with their contexts."""
+    item = {
+        "type": "llm",
+        "publisher": "qwen",
+        "key": key,
+        "display_name": "Qwen3 8B",
+        "architecture": "qwen3",
+        "quantization": {"name": "Q4_K_M", "bits_per_weight": 4},
+        "size_bytes": 5_000_000_000,
+        "params_string": "8B",
+        "loaded_instances": [
+            {
+                "id": instance,
+                "config": {"context_length": context, "flash_attention": True},
+            }
+            for instance, context in loaded
+        ],
+        "max_context_length": 40960,
+        "format": "gguf",
+        "capabilities": {"vision": False, "trained_for_tool_use": True},
+        "description": "secret-description-marker",
+    }
+    item.update(changes)
+    return item
 
 
 def complete_note(**changes):
@@ -1027,6 +1079,235 @@ class LoopbackCollection(unittest.TestCase):
         self.assertEqual(record["engine"], engine(reason="not requested"))
         self.assertEqual({p.pid for p in multiprocessing.active_children()}, children)
         validate_serving(record, "qwen-local")
+
+
+def rehashed(record, model):
+    """A record with its identity recomputed, so only shape rules reject it."""
+    record["identity"] = identity(
+        record["models"],
+        record["engine"],
+        record["owner_note"],
+        record["configuration"],
+        host=record["host"],
+        model_id=model,
+    )
+    return record
+
+
+class MacServers(unittest.TestCase):
+    """Ollama and LM Studio: identified by `owned_by`, one read-only probe."""
+
+    def test_ollama_version_probe(self):
+        routes = {
+            "/v1/models": json_reply(ollama_models()),
+            "/api/version": json_reply({"version": "0.12.3"}),
+        }
+        with serve(routes) as (base, requests):
+            endpoint = IsolatedEndpoint(base + "/v1", "qwen3:8b")
+            record = collect(endpoint, "qwen3:8b", None)
+        self.assertEqual(requests, [("GET", "/v1/models"), ("GET", "/api/version")])
+        self.assertEqual(record["engine"], engine("ollama", "0.12.3"))
+        self.assertEqual(record["models"]["entry"]["owned_by"], "library")
+        self.assertNotIn("serving_version", record["identity"]["missing"])
+        self.assertIn("context_profile", record["identity"]["missing"])
+        self.assertIsNone(context_tokens(record))
+        validate_serving(record, "qwen3:8b")
+        # Ollama's version endpoint reports nothing else, and needs a version.
+        for broken in [{}, {"version": 7}, {"version": "/opt/ollama"}, []]:
+            with self.subTest(broken=broken):
+                found = collect(
+                    FakeEndpoint({"models": ollama_models(), "api/version": broken}),
+                    "qwen3:8b",
+                    None,
+                )
+                self.assertEqual(
+                    found["engine"], engine("ollama", reason="invalid response")
+                )
+                validate_serving(found, "qwen3:8b")
+
+    def test_an_ollama_model_of_another_namespace_is_not_identified(self):
+        listing = ollama_models("someone/qwen3:8b", namespace="someone")
+        endpoint = FakeEndpoint({"models": listing})
+        record = collect(endpoint, "someone/qwen3:8b", None)
+        self.assertEqual([call[0] for call in endpoint.calls], ["models"])
+        self.assertEqual(
+            record["engine"], engine(reason="not requested for this runtime")
+        )
+        validate_serving(record, "someone/qwen3:8b")
+
+    def test_lmstudio_models_probe(self):
+        model = "qwen/qwen3-8b"
+        listing = {
+            "models": [
+                lmstudio_model("other/model", loaded=[("other/model", 4096)]),
+                lmstudio_model(model, loaded=[(model, 32768)]),
+            ]
+        }
+        routes = {
+            "/v1/models": json_reply(lmstudio_models(model)),
+            "/api/v1/models": json_reply(listing),
+        }
+        with serve(routes) as (base, requests):
+            endpoint = IsolatedEndpoint(base + "/v1", model)
+            record = collect(endpoint, model, None)
+        self.assertEqual(requests, [("GET", "/v1/models"), ("GET", "/api/v1/models")])
+        self.assertEqual(
+            record["engine"],
+            engine("lmstudio", context=32768, quantization="Q4_K_M"),
+        )
+        self.assertNotIn("secret-description-marker", json.dumps(record))
+        self.assertEqual(context_tokens(record), 32768)
+        # LM Studio reports no version: the note states it.
+        self.assertIn("serving_version", record["identity"]["missing"])
+        validate_serving(record, model)
+
+    def test_lmstudio_reports_what_it_knows_of_the_served_model(self):
+        model = "qwen/qwen3-8b"
+
+        def found(*items, served=model):
+            endpoint = FakeEndpoint(
+                {
+                    "models": lmstudio_models(served),
+                    "api/v1/models": {"models": list(items)},
+                }
+            )
+            record = collect(endpoint, served, None)
+            validate_serving(record, served)
+            return record["engine"]
+
+        # A second instance is listed under its own ID with its own context.
+        self.assertEqual(
+            found(
+                lmstudio_model(loaded=[(model, 8192), (model + ":2", 16384)]),
+                served=model + ":2",
+            ),
+            engine("lmstudio", context=16384, quantization="Q4_K_M"),
+        )
+        # Not loaded: the quantization of the key, no context; the trained
+        # maximum is not what a request can use.
+        self.assertEqual(
+            found(lmstudio_model()),
+            engine("lmstudio", quantization="Q4_K_M"),
+        )
+        self.assertEqual(
+            found(lmstudio_model(loaded_instances=None, quantization=None)),
+            engine("lmstudio"),
+        )
+        # Not listed at all: nothing is reported, the probe stands.
+        self.assertEqual(found(lmstudio_model("other/model")), engine("lmstudio"))
+        self.assertEqual(found(), engine("lmstudio"))
+        # A loaded instance without a context reports none.
+        self.assertEqual(
+            found(lmstudio_model(loaded_instances=[{"id": model}])),
+            engine("lmstudio", quantization="Q4_K_M"),
+        )
+
+    def test_a_malformed_lmstudio_list_fails_closed(self):
+        model = "qwen/qwen3-8b"
+        for broken in [
+            [],
+            {},
+            {"models": {}},
+            {"models": [7]},
+            {"models": [lmstudio_model(loaded_instances={})]},
+            {"models": [lmstudio_model(loaded_instances=[7])]},
+            {"models": [lmstudio_model(), lmstudio_model()]},
+            {
+                "models": [
+                    lmstudio_model(loaded=[(model, 1)]),
+                    lmstudio_model("other/model", loaded=[(model, 2)]),
+                ]
+            },
+            {"models": [lmstudio_model(loaded=[(model, 0)])]},
+            {"models": [lmstudio_model(loaded=[(model, True)])]},
+            {"models": [lmstudio_model(loaded_instances=[{"id": model, "config": 1}])]},
+            {"models": [lmstudio_model(quantization="Q4_K_M")]},
+            {"models": [lmstudio_model(quantization={"name": "/opt/q"})]},
+            {"models": [lmstudio_model(quantization={"name": 4})]},
+            {"models": [lmstudio_model()] * (serving.MAX_LISTED + 1)},
+        ]:
+            with self.subTest(broken=json.dumps(broken)[:120]):
+                endpoint = FakeEndpoint(
+                    {"models": lmstudio_models(model), "api/v1/models": broken}
+                )
+                record = collect(endpoint, model, None)
+                self.assertEqual(
+                    record["engine"], engine("lmstudio", reason="invalid response")
+                )
+                validate_serving(record, model)
+
+    def test_each_probe_reports_only_its_own_fields(self):
+        """A record whose engine holds a field its probe never reports is
+        refused, even with its identity recomputed."""
+        ollama = collect(
+            FakeEndpoint(
+                {"models": ollama_models(), "api/version": {"version": "0.12.3"}}
+            ),
+            "qwen3:8b",
+            None,
+        )
+        lmstudio = collect(
+            FakeEndpoint(
+                {
+                    "models": lmstudio_models(),
+                    "api/v1/models": {"models": [lmstudio_model()]},
+                }
+            ),
+            "qwen/qwen3-8b",
+            None,
+        )
+        within = {"enable_thinking": True}
+        cases = [
+            (ollama, "qwen3:8b", lambda e: e.update(version=None)),
+            (ollama, "qwen3:8b", lambda e: e.update(context_tokens=8192)),
+            (ollama, "qwen3:8b", lambda e: e.update(quantization="Q4_K_M")),
+            (ollama, "qwen3:8b", lambda e: e.update(runtime="vllm")),
+            (lmstudio, "qwen/qwen3-8b", lambda e: e.update(version="0.4.0")),
+            (lmstudio, "qwen/qwen3-8b", lambda e: e.update(kv_cache_dtype="q8_0")),
+            (
+                lmstudio,
+                "qwen/qwen3-8b",
+                lambda e: e.update(model_path={"basename": "m", "sha256": "0" * 64}),
+            ),
+            (
+                lmstudio,
+                "qwen/qwen3-8b",
+                lambda e: e.update(
+                    chat_template_defaults={
+                        "variables": within,
+                        "sha256": None,
+                        "reason": None,
+                    }
+                ),
+            ),
+        ]
+        for index, (record, model, change) in enumerate(cases):
+            validate_serving(record, model)
+            with self.subTest(index=index), self.assertRaises(ValueError):
+                changed = copy.deepcopy(record)
+                change(changed["engine"])
+                validate_serving(rehashed(changed, model), model)
+
+    def test_probes_are_fixed_paths_with_fixed_limits(self):
+        from victors_werkbank.agent.transport import PROBE_PATHS
+
+        self.assertLessEqual(
+            {"models"} | {path for _, path in serving.RUNTIMES.values()}, PROBE_PATHS
+        )
+        self.assertEqual(
+            set(serving.PROBE_FIELDS), {p for _, p in serving.RUNTIMES.values()}
+        )
+        for listing, path, limit in [
+            (ollama_models(), "api/version", VERSION_BYTES),
+            (lmstudio_models(), "api/v1/models", ENGINE_BYTES),
+        ]:
+            endpoint = FakeEndpoint({"models": listing, path: {"version": "1"}})
+            collect(endpoint, listing["data"][0]["id"], None)
+            self.assertEqual(endpoint.calls[1:], [(path, True, limit, PROBE_SECONDS)])
+        endpoint = IsolatedEndpoint("http://127.0.0.1:1/v1", "fake")
+        for path in ["api", "api/v2/models", "api/../models", "/api/version"]:
+            with self.subTest(path=path), self.assertRaises(EndpointError):
+                endpoint.get_json(path, root=True, max_bytes=1, timeout=1)
 
 
 class IsolatedProbe(unittest.TestCase):
@@ -2055,6 +2336,12 @@ V3_DIGEST = "a2f1a42ab5d592a1209cc5eb9654bd8b4c96c4b93f6ef99275ba6fc36ffff80c"
 V4 = json.loads(
     (Path(__file__).with_name("serving_v4_records.json")).read_text(encoding="utf-8")
 )
+# Records the build that wrote `werkbank-serving-v5` produced: an SGLang setup
+# with reported defaults, and an Ollama and an LM Studio listing, which that
+# format did not identify and so never probed.
+V5 = json.loads(
+    (Path(__file__).with_name("serving_v5_records.json")).read_text(encoding="utf-8")
+)
 
 
 class EarlierRecords(unittest.TestCase):
@@ -2151,11 +2438,55 @@ class EarlierRecords(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_serving(relabelled, "qwen-local")
 
-    def test_new_records_are_v5(self):
+    def test_v5_records_are_read_unchanged(self):
+        for name, record in V5["records"].items():
+            with self.subTest(name=name):
+                self.assertEqual(record["format"], SERVING_FORMAT_V5)
+                validate_serving(copy.deepcopy(record), "qwen-local")
+                self.assertEqual(
+                    identity(
+                        record["models"],
+                        record["engine"],
+                        record["owner_note"],
+                        record["configuration"],
+                        host=record["host"],
+                        model_id="qwen-local",
+                    ),
+                    record["identity"],
+                )
+                self.assertEqual(context_tokens(record), 262144)
+        for name in ("ollama", "lmstudio"):
+            self.assertEqual(
+                V5["records"][name]["engine"]["reason"],
+                "not requested for this runtime",
+            )
+
+    def test_v5_records_keep_their_shape(self):
+        # A v5 listing of Ollama or LM Studio had no engine probe: relabelled
+        # as v6, the missing probe is a broken record.
+        for name in ("ollama", "lmstudio"):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                validate_serving(
+                    dict(copy.deepcopy(V5["records"][name]), format=SERVING_FORMAT),
+                    "qwen-local",
+                )
+        # A v6 Ollama record is no v5 record.
+        record = collect(
+            FakeEndpoint(
+                {"models": ollama_models("qwen-local"), "api/version": {"version": "1"}}
+            ),
+            "qwen-local",
+            None,
+        )
+        validate_serving(record, "qwen-local")
+        with self.assertRaises(ValueError):
+            validate_serving(dict(record, format=SERVING_FORMAT_V5), "qwen-local")
+
+    def test_new_records_are_v6(self):
         record = vllm_record(complete_note())
         self.assertEqual(
             (SERVING_FORMAT, record["format"]),
-            ("werkbank-serving-v5", "werkbank-serving-v5"),
+            ("werkbank-serving-v6", "werkbank-serving-v6"),
         )
         self.assertEqual(
             set(record),
@@ -2170,7 +2501,7 @@ class EarlierRecords(unittest.TestCase):
                 "identity",
             },
         )
-        # The same setup as the frozen v3 and v4 records, now with a v5 digest.
+        # The same setup as the frozen v3 and v4 records, now with a v6 digest.
         self.assertNotEqual(record["identity"]["sha256"], V3_DIGEST)
         self.assertNotEqual(
             record["identity"]["sha256"], V4["records"]["vllm"]["identity"]["sha256"]

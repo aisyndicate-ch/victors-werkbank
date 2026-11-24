@@ -133,9 +133,7 @@ class HarborNegativePaths(unittest.IsolatedAsyncioTestCase):
         )
         with patch.object(runtime.urllib.request, "build_opener", return_value=opener):
             with self.assertRaisesRegex(HarborError, "Oversized"):
-                await runtime.SmokeAgent.run(
-                    agent, runtime.DomainAlgebra.prompt, None, None
-                )
+                await runtime.SmokeAgent.run(agent, runtime.PROMPT, None, None)
         self.assertFalse(agent.trusted.exists())
 
     async def test_verifier_uploads_validated_snapshot_not_changed_source(self):

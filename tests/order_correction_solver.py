@@ -56,6 +56,13 @@ class Desk:
         order, stock, rates = (self.read(r) for r in ("order", "stock", "rates"))
         lines = [row for row in table(order["lines"]) if row["metres"] is not None]
         slot = rates["slot"]
+        # The delivery that holds the slot names its warehouse; every other
+        # open delivery goes at the spot tariff.
+        slot_row = next(
+            row
+            for row in table(order["deliveries"])
+            if row["delivery"] == slot["delivery"]
+        )
         return {
             "lines": [
                 {
@@ -82,15 +89,13 @@ class Desk:
                 for row in table(stock["remnants"])
                 if row["state"] == "free"
             },
-            "north_kg": next(
+            "slot_warehouse": slot_row["warehouse"],
+            "slot_kg": slot_row["kg"],
+            "other_kg": sum(
                 row["kg"]
                 for row in table(order["deliveries"])
-                if row["delivery"] == slot["delivery"]
-            ),
-            "south_kg": sum(
-                row["kg"]
-                for row in table(order["deliveries"])
-                if row["warehouse"] == "South"
+                if row["state"] != "shipped"
+                and row["warehouse"] != slot_row["warehouse"]
             ),
             "slot_held": slot["state"] == "held",
             "low_kg": slot["booked_kg"] * slot["low_pct"] / 100,
@@ -129,13 +134,13 @@ class Desk:
 
     def total(self, state: dict[str, Any]) -> int:
         lines = sum(line["amount"] for line in state["lines"])
-        north = (
+        slot = (
             state["slot_charge"]
             if state["slot_held"]
-            else self.spot(state, state["north_kg"])
+            else self.spot(state, state["slot_kg"])
         )
-        south = self.spot(state, state["south_kg"]) if state["south_kg"] else 0
-        return lines + state["other_amounts"] + north + south
+        other = self.spot(state, state["other_kg"]) if state["other_kg"] else 0
+        return lines + state["other_amounts"] + slot + other
 
     @staticmethod
     def batch_open(state: dict[str, Any], row: dict[str, Any]) -> bool:
@@ -184,10 +189,11 @@ class Desk:
         kg = after["kg_per_m"]
 
         def weigh(source_row: dict[str, Any], metres: int) -> None:
-            key = "north_kg" if source_row["warehouse"] == "North" else "south_kg"
+            at_slot = source_row["warehouse"] == after["slot_warehouse"]
+            key = "slot_kg" if at_slot else "other_kg"
             after[key] += metres * kg
-            if key == "north_kg" and not (
-                after["low_kg"] <= after["north_kg"] <= after["high_kg"]
+            if at_slot and not (
+                after["low_kg"] <= after["slot_kg"] <= after["high_kg"]
             ):
                 after["slot_held"] = False
 

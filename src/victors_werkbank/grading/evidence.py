@@ -1,5 +1,5 @@
 """Evidence of one episode, admitted without Harbor: its manifest, journal and
-snapshot under `episodes/<name>/` of a run (run contract `harbor-run-v4`).
+snapshot under `episodes/<name>/` of a run (run contract `harbor-run-v6`).
 
 Every file is a bounded regular file reached without following a link, with
 the exact size and digest its manifest names; anything else is ungradable,

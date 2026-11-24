@@ -36,6 +36,7 @@ GRADER_MODULES = (
     "agent/transport.py",
     "domains/__init__.py",
     "domains/algebra.py",
+    "domains/variants.py",
     "harbor_controls.py",
 )
 

@@ -1,4 +1,34 @@
-[
-  ["commit_first", {"chip": "w1", "valid": "125/576", "probability": "54/125"}],
-  ["commit_second", {"valid": "615/2176", "probability": "29/54"}]
-]
+{
+ "instance": "f915ab9b63eee0c7",
+ "calls": [
+  [
+   "commit_candidate",
+   {
+    "chip": "w8",
+    "valid": "2/9",
+    "probability": "27/64"
+   }
+  ],
+  [
+   "commit_candidate",
+   {
+    "chip": "w3",
+    "valid": "131/576",
+    "probability": "57/131"
+   }
+  ],
+  [
+   "withdraw",
+   {
+    "chip": "w3"
+   }
+  ],
+  [
+   "commit_second",
+   {
+    "valid": "151/480",
+    "probability": "193/453"
+   }
+  ]
+ ]
+}

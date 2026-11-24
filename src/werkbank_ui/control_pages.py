@@ -8,7 +8,7 @@ from typing import Any
 
 from werkbank_start import discovery
 from werkbank_start.console import duration
-from werkbank_start.flow import TRIAL_TEXT
+from werkbank_start.flow import DRAWN_DATA, TRIAL_TEXT, modes
 
 from . import control
 from .pages import page
@@ -114,6 +114,8 @@ def new_series(token: str, defaults: Any, problem: str | None = None) -> str:
         if problem
         else ""
     )
+    found = [mode.title for mode in modes().values() if not mode.trial]
+    titles = ", ".join(found[:-1]) + " or " + found[-1]
     return page(
         "New series",
         "<h1>New series</h1>"
@@ -132,10 +134,11 @@ def new_series(token: str, defaults: Any, problem: str | None = None) -> str:
         "<li>A request to the model goes out only after your choice, or with"
         " exactly one server and one model found.</li>"
         "<li>You choose the mode after the server check: Trial ("
-        f"{_text(TRIAL_TEXT[0].lower() + TRIAL_TEXT[1:])}), Quick, Normal or"
-        " Full, each shown with its scope and context need. For Quick, Normal"
-        " and Full you then choose three passes or one; a single pass is never"
-        " submitted.</li>"
+        f"{_text(TRIAL_TEXT[0].lower() + TRIAL_TEXT[1:])}), {_text(titles)},"
+        " each shown with its scope and context need. For every mode but the"
+        " trial you then choose three passes or one; a single pass is never"
+        " submitted and has no score, which needs three passes.</li>"
+        f"<li>{_text(DRAWN_DATA)}</li>"
         "<li>A running pass can be stopped, not paused: a stopped pass stays as"
         " evidence and is run again as a whole.</li>"
         "<li>The series runs in the process that serves this page. Closing the"

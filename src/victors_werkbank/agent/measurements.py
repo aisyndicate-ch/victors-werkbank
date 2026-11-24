@@ -41,9 +41,9 @@ MAX_TEMPERATURE = 2
 MAX_TOP_K = 1_000_000
 # Portable seed range: llama.cpp, vLLM and SGLang all accept 32-bit values.
 MAX_SEED = 2**32 - 1
-# Repetitions a run needs unless it sets temperature 0: a server default is
-# unknown and counts like a temperature above 0.
-MIN_REPETITIONS_ABOVE_ZERO = 3
+# Runs a pool needs for scores, whatever its sampling: one run is one draw of
+# the model and, for a case that draws its data per run, of one instance.
+MIN_REPETITIONS = 3
 # The template variables a run may send: a flat object of named switches and
 # levels, no structure, so that no value can replace the messages or tools,
 # add a sentence to a template that writes it into the prompt, or carry a
@@ -191,12 +191,6 @@ def server_default(value: dict[str, Any]) -> bool:
     """No sampler setting is sent (a seed or template variables alone set
     none): the server's default sampling applies."""
     return not any(key in value for key in SAMPLER_KEYS)
-
-
-def needs_repetitions(value: dict[str, Any]) -> bool:
-    """Rates need repetitions unless temperature 0 is sent: the server's
-    default, whatever else is set, counts like a temperature above 0."""
-    return value.get("temperature") != 0
 
 
 SERVER_DEFAULT = "server default"

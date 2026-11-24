@@ -28,9 +28,9 @@ from ..agent.loop import NO_PROGRESS, NO_PROGRESS_RESPONSES
 from ..agent.measurements import (
     CACHED_TOKENS,
     FIRST_TOKEN,
+    MIN_REPETITIONS,
     TEMPLATE_KWARGS,
     TIMING_KEYS,
-    needs_repetitions,
     reasoning_seen,
     sampling_text,
     server_default,
@@ -73,6 +73,10 @@ NO_RESPONSES = "no response to count reasoning in"
 # an argument.
 NO_PROGRESS_NOTE = "no progress: stopped after response {response:,}, repeating {tools}"
 UNOFFERED_TOOLS = "tools the task does not offer"
+# How far the scripted user of a multi-turn case got, as the journal shows it:
+# the prompt is message 1, each `user_turn` event one more. A stop of the
+# harness before the last message leaves the remaining ones unsent.
+USER_TURNS_NOTE = "user message {reached} of {total}"
 # Reasons of status `failed` that are stops of the harness, not results.
 BUDGET_STOPS = frozenset({"turn_limit", NO_PROGRESS[1]})
 
@@ -119,6 +123,24 @@ def no_progress_stop(
         "tools": list(dict.fromkeys(known)),
         "unoffered": len(known) < len(names),
     }
+
+
+def user_turns_reached(
+    case_id: str, events: list[dict[str, Any]] | None
+) -> tuple[int, int] | None:
+    """For a case with a scripted user, the messages its journal shows sent
+    (a `user_turn` whose request followed it) and how many the script has;
+    None for a case of one message or without evidence."""
+    total = CASES[case_id].user_turns
+    if total == 1 or not events:
+        return None
+    sent = sum(
+        event["kind"] == "user_turn"
+        and following["kind"] == "model_request"
+        and "omitted" not in following["payload"]
+        for event, following in zip(events, events[1:])
+    )
+    return 1 + sent, total
 
 
 def no_progress_text(stop: dict[str, Any]) -> str:
@@ -408,6 +430,32 @@ def thinking_markdown(sampling: dict[str, Any], seen: int, responses: int) -> st
     return f"{sent}; {reasoning_text(seen, responses)}"
 
 
+# The run's instance value and how the run came by it: drawn for the run, or
+# given to repeat an earlier run's data, which keeps the run out of every pool.
+INSTANCE_DRAWN = (
+    "Instance value: `{value}`, drawn for this run. The data of every case were"
+    " built from it; `werkbank run --instance {value}`"
+    " repeats them, and a run repeated that way enters no pool"
+)
+INSTANCE_GIVEN = (
+    "Instance value: `{value}`, given with `--instance`. The data of every case"
+    " were built from it, as in the run it repeats; a run"
+    " with a given value serves reproduction and enters no pool"
+)
+
+
+def instance_line(plan: dict[str, Any]) -> str:
+    """A run's instance value with its source and what it stands for."""
+    instance = plan["instance"]
+    text = INSTANCE_GIVEN if instance["source"] == "given" else INSTANCE_DRAWN
+    return text.format(value=instance["value"])
+
+
+# Why a run report has no score, whatever the run's sampling.
+REPETITIONS = (
+    f"Repetitions: one run has no score; a pool needs at least {MIN_REPETITIONS}"
+    " runs of one setup, at temperature 0 too (`werkbank compare`)"
+)
 # The run report's per-episode subgoals: a diagnostic, never a credit.
 SUBGOALS_NOTE = (
     "Diagnostic, from the checks each episode's verifier recorded: a subgoal is"
@@ -519,12 +567,9 @@ def render(view: RunView) -> tuple[str, str]:
         f"- Harness: `{plan['harness_sha256']}`",
         f"- Image: `{plan['image']}`; Harbor {plan['harbor']['version']}",
         f"- Per-response cap: {plan['max_tokens_per_call']}; budget profile `{plan['budget_profile']}`",
-        f"- Sampling: {sampling}"
-        + (
-            "; needs at least three repetitions"
-            if needs_repetitions(plan["sampling"])
-            else ""
-        ),
+        f"- Sampling: {sampling}",
+        f"- {REPETITIONS}",
+        f"- {instance_line(plan)}",
         f"- Thinking: {thinking}",
         *defaults_lines(plan["serving"]),
         f"- Streaming: {'on' if plan['streaming'] else 'off'}",
@@ -536,12 +581,18 @@ def render(view: RunView) -> tuple[str, str]:
     lines += ["", *_outcome_lines(run["results"])]
     lines += ["", "## Cases", ""]
     stops: dict[str, list[dict[str, Any]]] = {}
+    turns: dict[str, list[tuple[str, int, int]]] = {}
     for episode in view.episodes:
         stop = no_progress_stop(
             episode.record["result"], episode.row["branch_id"], episode.events
         )
         if stop is not None:
             stops.setdefault(episode.row["case_id"], []).append(stop)
+        reached = user_turns_reached(episode.row["case_id"], episode.events)
+        if reached is not None:
+            turns.setdefault(episode.row["case_id"], []).append(
+                (episode.row["branch_id"], *reached)
+            )
     rows = []
     for result in run["results"]:
         cid = result["case_id"]
@@ -554,6 +605,9 @@ def render(view: RunView) -> tuple[str, str]:
             text = no_progress_text(stop)
             own = stop["branch_id"] != "default"
             flags.append(f"{stop['branch_id']}: {text}" if own else text)
+        for branch, delivered, total in turns.get(cid, []):
+            text = USER_TURNS_NOTE.format(reached=delivered, total=total)
+            flags.append(f"{branch}: {text}" if branch != "default" else text)
         rows.append(
             [
                 cid,

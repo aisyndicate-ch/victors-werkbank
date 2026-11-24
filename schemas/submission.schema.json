@@ -1,12 +1,15 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:werkbank:submission:1.0.0",
+  "$id": "urn:werkbank:submission:2.0.0",
   "title": "Submission envelope (submission.json, werkbank submit)",
-  "description": "The first member of a submission archive (docs/SUBMISSION.md): the submitting build, the evaluation by format and digest, the case set, the evaluated runs, the answers to the questionnaire, the consent shown and whether raw data is included, and every other member by path, size and digest. No free text, no time stamp, no local path, host name or endpoint.",
+  "description": "The first member of a submission archive (docs/SUBMISSION.md): the submitting build, the evaluation by format and digest, the case set, the evaluated runs, the answers to the questionnaire, the consent texts shown and whether raw data is included, the consent to publication on the leaderboard with the display name, and every other member by path, size and digest. This build writes werkbank-submission-v2; submissions of earlier builds carry werkbank-submission-v1, without the leaderboard. No free text but the display name, no time stamp, no local path, host name or endpoint.",
   "type": "object",
   "properties": {
     "format": {
-      "const": "werkbank-submission-v1"
+      "enum": [
+        "werkbank-submission-v1",
+        "werkbank-submission-v2"
+      ]
     },
     "installation_id": {
       "type": "string",
@@ -177,17 +180,53 @@
         "text": {
           "enum": [
             "werkbank-consent-v1",
-            "werkbank-consent-v2"
+            "werkbank-consent-v2",
+            "werkbank-consent-v3"
           ],
-          "description": "The consent text shown: this build shows werkbank-consent-v2; submissions of earlier builds carry werkbank-consent-v1"
+          "description": "The consent text shown: this build shows werkbank-consent-v3; submissions of earlier builds carry werkbank-consent-v2 or werkbank-consent-v1"
         },
         "raw_data": {
           "type": "boolean"
+        },
+        "leaderboard": {
+          "enum": [
+            "werkbank-leaderboard-consent-v1",
+            null
+          ],
+          "description": "The leaderboard's consent text, shown before its question with raw data on a scored case set; null where it was not shown"
         }
       },
       "required": [
         "raw_data",
         "text"
+      ],
+      "additionalProperties": false
+    },
+    "leaderboard": {
+      "type": "object",
+      "description": "The consent to publication on the leaderboard, asked apart from the consent to send and only with raw data, and the display name, null for anonymous",
+      "properties": {
+        "publish": {
+          "type": "boolean"
+        },
+        "display_name": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32,
+              "pattern": "^[^\\s@:/\\\\\\x00-\\x1f\\x7f](?:[^@:/\\\\\\x00-\\x1f\\x7f]*[^\\s@:/\\\\\\x00-\\x1f\\x7f])?$"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "1 to 32 characters in NFC: letters, digits 0-9, spaces, -, _ and ., starting and ending with a letter or digit; the client checks the exact form"
+        }
+      },
+      "required": [
+        "display_name",
+        "publish"
       ],
       "additionalProperties": false
     },
@@ -232,5 +271,118 @@
     "runs",
     "werkbank"
   ],
-  "additionalProperties": false
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "format": {
+            "const": "werkbank-submission-v2"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "leaderboard"
+        ],
+        "properties": {
+          "consent": {
+            "properties": {
+              "text": {
+                "const": "werkbank-consent-v3"
+              }
+            },
+            "required": [
+              "leaderboard"
+            ]
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "consent": {
+                  "properties": {
+                    "raw_data": {
+                      "const": false
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "consent": {
+                  "properties": {
+                    "leaderboard": {
+                      "const": null
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "leaderboard": {
+                  "properties": {
+                    "publish": {
+                      "const": false
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "leaderboard": {
+                  "properties": {
+                    "display_name": {
+                      "const": null
+                    }
+                  }
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "consent": {
+                  "properties": {
+                    "leaderboard": {
+                      "const": "werkbank-leaderboard-consent-v1"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "leaderboard"
+          ]
+        },
+        "properties": {
+          "consent": {
+            "properties": {
+              "text": {
+                "enum": [
+                  "werkbank-consent-v1",
+                  "werkbank-consent-v2"
+                ]
+              }
+            },
+            "not": {
+              "required": [
+                "leaderboard"
+              ]
+            }
+          }
+        }
+      }
+    }
+  ]
 }

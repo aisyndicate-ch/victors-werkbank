@@ -63,11 +63,11 @@ DIFFERENT_CASES = (
 )
 TRIAL_REFUSED = (
     "This is a trial of werkbank start, not a benchmark: a trial is never"
-    " submitted. Start Quick, Normal or Full for results to send."
+    " submitted. Start Quick, Normal, Full or German for results to send."
 )
 SINGLE_PASS_REFUSED = (
     "This is a single pass of werkbank start: results to send hold three"
-    " passes. Start Quick, Normal or Full with three passes for results to send."
+    " passes. Start Quick, Normal, Full or German with three passes for results to send."
 )
 CHANGED = "A file changed while it was read; run the submission again."
 PAGE_PLACE = (

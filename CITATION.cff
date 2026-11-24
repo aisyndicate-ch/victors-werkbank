@@ -9,7 +9,7 @@ type: software
 authors:
   - given-names: Victor
     family-names: Klaue
-version: 0.3.1
+version: 0.4.0
 license: Apache-2.0
 repository-code: "https://github.com/aisyndicate-ch/victors-werkbank"
 keywords:

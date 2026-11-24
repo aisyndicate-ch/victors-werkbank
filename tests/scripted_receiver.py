@@ -14,7 +14,8 @@ import time
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-FORMAT = "werkbank-submission-v1"
+# The formats the receiver accepts: this build's and the earlier one.
+FORMATS = ("werkbank-submission-v1", "werkbank-submission-v2")
 RECEIPT = "werkbank-receipt-v1"
 PATH = "/submissions"
 MAX_BODY = 67_108_864
@@ -153,7 +154,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if (
             headers.get("Content-Type") != "application/gzip"
-            or headers.get("X-Werkbank-Submission") != FORMAT
+            or headers.get("X-Werkbank-Submission") not in FORMATS
         ):
             self._request(None)
             error(self, 415, "unsupported_format")

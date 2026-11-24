@@ -4,7 +4,8 @@ one self-contained HTML document.
 Pure and deterministic: the same record always gives the same bytes, with no
 time, local path, host name or address in it. Every value from the record is
 escaped; the fixed texts are the module's string constants. Pools follow the
-record's order and are never sorted by a value. A pool's weighted overall
+record's order and are never sorted by a value; an entry of passes that were
+given their instance value is headed as one and numbered apart from the pools. A pool's weighted overall
 score stands on the page where its evaluation has one, with its interval
 where that exists; otherwise the page says nothing about it. Beside the tasks
 solved stands the subgoal fulfilment overall and, next to each category's
@@ -12,8 +13,12 @@ solved attempts, per category: how close the attempts came, never a score;
 the security section adds each security task's subgoals reached and
 boundaries held and broken per part where the evaluation records them. A
 trial's page says it is a trial and no benchmark and never shows a score; a
-single pass's page says it is one and keeps its numbers. It
-shows no bounds, no ranking and no other model's values.
+single pass's page says it is one. Neither has a core number, which needs
+three passes; both show what happened in every attempt. Each pool's facts
+show the instance values of its passes beside their seeds, and passes that
+were given their value to repeat an earlier run's data have no core number.
+A pool of a module's cases (the German module) says that it stands outside
+the score. It shows no bounds, no ranking and no other model's values.
 """
 
 import html
@@ -22,7 +27,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from victors_werkbank.agent.measurements import (
-    MIN_REPETITIONS_ABOVE_ZERO,
+    MIN_REPETITIONS,
     SERVER_DEFAULT,
     SERVER_DEFAULT_SEED,
     TEMPLATE_KWARGS,
@@ -30,7 +35,11 @@ from victors_werkbank.agent.measurements import (
 )
 from victors_werkbank.grading.evidence import encode, sha256
 from victors_werkbank.results.comparison import SOURCE_TEXTS
-from victors_werkbank.results.evaluation import escaped, recommendation_lines
+from victors_werkbank.results.evaluation import (
+    entry_numbers,
+    escaped,
+    recommendation_lines,
+)
 from victors_werkbank.results.outcomes import (
     FULFILMENT,
     FULFILMENT_NOTE,
@@ -109,11 +118,35 @@ SINGLE_PASS_NOTICE = (
     " Results to compare and to submit hold three passes, so this one is"
     " never submitted."
 )
-POOL_HEADING = "Pool {index} of {total}: {model}"
+# A pool of a module's cases, outside every score: what it shows instead.
+MODULE_NOTICES = {
+    "german": (
+        "German module, outside the score: tasks on German documents from"
+        " Germany, Austria and Switzerland, shown by the tasks solved per pass"
+        " and the subgoal fulfilment. They have no points and never enter an"
+        " overall score or a ranking."
+    ),
+}
+POOL_HEADING = "Pool {index} of {total}: {setup}"
+# Passes that were given their instance value are no pool: their section is
+# named for what it holds and numbered apart from the pools.
+GIVEN_HEADING = "Runs with a given instance value, {index} of {total}: {setup}"
+# The setup an entry's numbers describe, in its heading: the served model with
+# its quantization, engine, context, hardware and the thinking setting sent.
+SETUP = (
+    "{model} · quantization {quantization} · engine {engine} · context {context}"
+    " · hardware {hardware} · thinking {thinking}"
+)
+SETUP_NOTE = (
+    "These numbers describe this setup, not the model alone: the same model with"
+    " another quantization, engine, context, hardware or thinking setting is"
+    " another setup and can fare otherwise."
+)
 FACT_MODEL = "Served model"
 FACT_CASE_SET = "Case set"
 FACT_PASSES = "Passes"
 FACT_SEEDS = "Seeds"
+FACT_INSTANCES = "Instance values"
 FACT_SAMPLING = "Sampling"
 FACT_THINKING = "Thinking"
 FACT_HARDWARE = "Hardware"
@@ -133,10 +166,10 @@ TOKENS = "{count} tokens"
 VERSION = "{version}, build {build}"
 HARDWARE = "{text} ({source})"
 ENGINE = "{runtime} {version}"
+ENGINE_NO_VERSION = "{runtime}, version unknown"
 
 CORE_HEADING = "Tasks solved"
 CORE = "{mean} of {tasks} tasks solved on average per pass; passes: {low} to {high}"
-CORE_ONE = "{solved} of {tasks} tasks solved in its one pass"
 NO_CORE_INVALID = (
     "No core number: an invalid result (a technical problem that stops the run)"
     " leaves this pool unevaluated."
@@ -144,8 +177,15 @@ NO_CORE_INVALID = (
 INVALID_IN_SPLIT = "The split below marks it among the technical problems."
 INVALID_OUTSIDE = "It lies in a planned case outside the evaluated cases."
 NO_CORE_REPETITIONS = (
-    "No core number: without temperature 0 a pool needs at least {minimum}"
-    " passes; this one has {passes}. The split below still counts every attempt."
+    "No core number: a pool needs at least {minimum} passes, whatever its"
+    " sampling; this one has {passes}. The split below still counts every"
+    " attempt."
+)
+NO_CORE_GIVEN = (
+    "No core number: these passes were given their instance value (werkbank run"
+    " --instance) to repeat the data of an earlier run. They serve reproduction"
+    " alone: they are no pool and get no score. The split below still counts"
+    " every attempt."
 )
 REPEATED_RESULT = (
     "Pass {number} (seed {seed}) was repeated after a technical problem"
@@ -225,6 +265,9 @@ EFFORT_NOTE = (
     " divided by the solved ones. Censored attempts are also shown apart."
 )
 NO_EFFORT = "Not evaluated: a pool without a core number has no effort per solved task."
+NO_EFFORT_GIVEN = (
+    "Not evaluated: runs with a given instance value have no effort per solved task."
+)
 
 HINTS_HEADING = "Limit hints"
 NO_HINTS = "No limit hints"
@@ -257,13 +300,11 @@ SAMPLING_ORDER = ("temperature", "top_p", "top_k", "seed")
 SAMPLING_SETTING = "{name} {value}"
 THINKING = "{sent}; {reasoning}"
 HERO_UNIT = "of {tasks} tasks solved on average per pass"
-HERO_UNIT_ONE = "of {tasks} tasks solved in its one pass"
 CORE_GRAPHIC_TITLE = "Tasks solved per pass, on a scale from 0 to {tasks}"
 CORE_GRAPHIC_DESC = (
     "Average {mean} of {tasks} tasks; the passes range from {low} (weakest) to"
     " {high} (best)."
 )
-CORE_GRAPHIC_DESC_ONE = "{solved} of {tasks} tasks in the one pass."
 PASS_MARK = "Pass {number}: {solved} of {tasks} tasks solved"
 AVERAGE = "average {mean}"
 WEAKEST = "weakest pass"
@@ -517,22 +558,53 @@ def _sampling(value: dict[str, Any]) -> str:
     )
 
 
-def _thinking(value: dict[str, Any], reasoning: dict[str, Any]) -> str:
-    """The thinking setting as a reader reads it: `server default` or each
-    template variable sent, as name and value in sorted order, and how many
-    responses returned reasoning."""
+def _sent(value: dict[str, Any]) -> str:
+    """The thinking setting sent: `server default` or each template variable,
+    as name and value in sorted order."""
     variables = value.get(TEMPLATE_KWARGS)
-    sent = (
-        SERVER_DEFAULT
-        if variables is None
-        else ", ".join(
-            SAMPLING_SETTING.format(name=name, value=json.dumps(variables[name]))
-            for name in sorted(variables)
-        )
+    if variables is None:
+        return SERVER_DEFAULT
+    return ", ".join(
+        SAMPLING_SETTING.format(name=name, value=json.dumps(variables[name]))
+        for name in sorted(variables)
     )
+
+
+def _thinking(value: dict[str, Any], reasoning: dict[str, Any]) -> str:
+    """The thinking setting as a reader reads it: the setting sent and how
+    many responses returned reasoning."""
     return THINKING.format(
-        sent=sent,
+        sent=_sent(value),
         reasoning=reasoning_text(reasoning["with_reasoning"], reasoning["responses"]),
+    )
+
+
+def _engine(serving: dict[str, Any]) -> str:
+    """The engine with its version, `unknown` where neither is known."""
+    runtime, version = serving["serving_runtime"], serving["serving_version"]
+    if runtime is None and version is None:
+        return UNKNOWN
+    if version is None:
+        return ENGINE_NO_VERSION.format(runtime=runtime)
+    return ENGINE.format(runtime=runtime or UNKNOWN, version=version)
+
+
+def _context(serving: dict[str, Any]) -> str:
+    context = serving["context_profile"]
+    return UNKNOWN if context is None else TOKENS.format(count=f"{context:,}")
+
+
+def _setup(entry: dict[str, Any]) -> str:
+    """The setup an entry's numbers describe, for its heading: every part from
+    the entry's own record, `unknown` or `not stated` where it holds none."""
+    serving, statement = entry["serving"], entry["hardware"]
+    return SETUP.format(
+        model=entry["model_id"],
+        quantization=serving["quantization"] or UNKNOWN,
+        engine=_engine(serving),
+        context=_context(serving),
+        hardware=NOT_STATED if statement is None else statement["text"],
+        thinking=_sent(entry["configuration"]["sampling"]),
     )
 
 
@@ -569,14 +641,9 @@ def _core_graphic(found: dict[str, Any], name: str) -> list[str]:
     def x(value: float) -> float:
         return CORE_LEFT + (CORE_RIGHT - CORE_LEFT) * value / max(tasks, 1)
 
-    one = len(passes) == 1
     shown = f"{mean:.1f}"
-    hero = (HERO_UNIT_ONE if one else HERO_UNIT).format(tasks=tasks)
-    desc = (
-        CORE_GRAPHIC_DESC_ONE.format(solved=low, tasks=tasks)
-        if one
-        else CORE_GRAPHIC_DESC.format(mean=shown, tasks=tasks, low=low, high=high)
-    )
+    hero = HERO_UNIT.format(tasks=tasks)
+    desc = CORE_GRAPHIC_DESC.format(mean=shown, tasks=tasks, low=low, high=high)
     weakest = _inside(x(low) + 4, WEAKEST, "end")
     best = _inside(x(high) - 4, BEST, "start")
     # Two labels pushed against one edge would overlap: the best one then
@@ -589,7 +656,7 @@ def _core_graphic(found: dict[str, Any], name: str) -> list[str]:
     lines = [
         '<figure class="graphic">',
         '<p class="hero" aria-hidden="true">'
-        f'<span class="hero-number">{_text(low if one else shown)}</span>'
+        f'<span class="hero-number">{_text(shown)}</span>'
         f'<span class="hero-unit">{_text(hero)}</span></p>',
         *_svg(
             f"{name}-core",
@@ -632,13 +699,11 @@ def _core_graphic(found: dict[str, Any], name: str) -> list[str]:
             f'<circle class="pass" cx="{_n(x(solved))}" cy="35" r="5">'
             f"<title>{_text(mark)}</title></circle>"
         )
-    if not one:
-        at = min(max(x(mean), 50), 670)
-        lines += [
-            f'<line class="mean" x1="{_n(x(mean))}" y1="22" x2="{_n(x(mean))}"'
-            ' y2="48"/>',
-            _label(at, 15, AVERAGE.format(mean=shown), "middle", "ink"),
-        ]
+    at = min(max(x(mean), 50), 670)
+    lines += [
+        f'<line class="mean" x1="{_n(x(mean))}" y1="22" x2="{_n(x(mean))}" y2="48"/>',
+        _label(at, 15, AVERAGE.format(mean=shown), "middle", "ink"),
+    ]
     return [*lines, "</svg>", "</figure>"]
 
 
@@ -815,10 +880,22 @@ def _facts(record: dict[str, Any], entry: dict[str, Any]) -> list[str]:
     configuration, serving = entry["configuration"], entry["serving"]
     case_set = case_set_text(entry["case_set"], entry["case_ids"])
     statement = entry["hardware"]
-    context = serving["context_profile"]
     evaluator = record["evaluator"]
+    # The setup first, in the order of the heading, then the runs.
     facts = [
         (FACT_MODEL, entry["model_id"]),
+        (FACT_QUANTIZATION, serving["quantization"] or UNKNOWN),
+        (FACT_ENGINE, _engine(serving)),
+        (FACT_CONTEXT, _context(serving)),
+        (
+            FACT_HARDWARE,
+            NOT_STATED
+            if statement is None
+            else HARDWARE.format(
+                text=statement["text"], source=SOURCE_TEXTS[statement["source"]]
+            ),
+        ),
+        (FACT_THINKING, _thinking(configuration["sampling"], entry["reasoning"])),
         (
             FACT_CASE_SET,
             CASE_SET_TASKS.format(case_set=case_set, tasks=len(entry["cases"])),
@@ -830,28 +907,8 @@ def _facts(record: dict[str, Any], entry: dict[str, Any]) -> list[str]:
                 NO_SEED if seed is None else str(seed) for seed in entry["seeds"]
             ),
         ),
+        (FACT_INSTANCES, ", ".join(entry["instances"])),
         (FACT_SAMPLING, _sampling(configuration["sampling"])),
-        (FACT_THINKING, _thinking(configuration["sampling"], entry["reasoning"])),
-        (
-            FACT_HARDWARE,
-            NOT_STATED
-            if statement is None
-            else HARDWARE.format(
-                text=statement["text"], source=SOURCE_TEXTS[statement["source"]]
-            ),
-        ),
-        (
-            FACT_ENGINE,
-            ENGINE.format(
-                runtime=serving["serving_runtime"] or UNKNOWN,
-                version=serving["serving_version"] or UNKNOWN,
-            ),
-        ),
-        (FACT_QUANTIZATION, serving["quantization"] or UNKNOWN),
-        (
-            FACT_CONTEXT,
-            UNKNOWN if context is None else TOKENS.format(count=f"{context:,}"),
-        ),
         (
             FACT_CAP,
             TOKENS.format(count=f"{configuration['max_tokens_per_call']:,}"),
@@ -901,17 +958,16 @@ def _core(
     found = per_pass(entry)
     if found is not None:
         lines += _core_graphic(found, name)
-        if len(found["passes"]) == 1:
-            text = CORE_ONE.format(solved=found["low"], tasks=found["tasks"])
-        else:
-            text = CORE.format(
-                mean=f"{found['mean']:.1f}",
-                tasks=found["tasks"],
-                low=found["low"],
-                high=found["high"],
-            )
+        text = CORE.format(
+            mean=f"{found['mean']:.1f}",
+            tasks=found["tasks"],
+            low=found["low"],
+            high=found["high"],
+        )
         lines.append(_paragraph(text, "core"))
         lines += _fulfilment(entry)
+    elif "given_instance" in entry["flags"]:
+        lines.append(_paragraph(NO_CORE_GIVEN, "core"))
     elif "invalid_result" in entry["flags"]:
         lines.append(_paragraph(" ".join(_invalid_texts(entry)), "core"))
     elif trial:
@@ -920,7 +976,7 @@ def _core(
         lines.append(
             _paragraph(
                 NO_CORE_REPETITIONS.format(
-                    minimum=MIN_REPETITIONS_ABOVE_ZERO, passes=entry["repetitions"]
+                    minimum=MIN_REPETITIONS, passes=entry["repetitions"]
                 ),
                 "core",
             )
@@ -957,7 +1013,7 @@ def _overall(record: dict[str, Any], entry: dict[str, Any]) -> list[str]:
     """The weighted overall score of a pool that has one, with the case set it
     is over and its interval where that exists; nothing at all otherwise: only
     a pool that measured every case of a scored case set has such a number, so
-    Quick and an own selection have none."""
+    a set that is not scored and an own selection have none."""
     points = entry["scores"]["overall"]["points"] if entry["scores"] else None
     if points is None or points["score"] is None:
         return []
@@ -1082,7 +1138,8 @@ def _effort(entry: dict[str, Any]) -> list[str]:
     lines = [f"<h3>{_text(EFFORT_HEADING)}</h3>"]
     speed = entry["efficiency"]
     if speed is None:
-        return [*lines, _paragraph(NO_EFFORT)]
+        given = "given_instance" in entry["flags"]
+        return [*lines, _paragraph(NO_EFFORT_GIVEN if given else NO_EFFORT)]
     rows = [_effort_row(name, item) for name, item in speed["categories"].items()]
     rows.append(_effort_row(OVERALL, speed["overall"]))
     return [
@@ -1166,14 +1223,21 @@ def _pool(
     record: dict[str, Any],
     entry: dict[str, Any],
     index: int,
-    total: int,
+    heading: str,
     repeats: Sequence[dict[str, Any]] = (),
     trial: bool = False,
 ) -> list[str]:
-    heading = POOL_HEADING.format(index=index, total=total, model=entry["model_id"])
+    """One entry's section: `index` is its place on the page, which names
+    its anchors and graphics; `heading` says what it is."""
     return [
         f'<section class="pool" id="pool-{index}">',
         f"<h2>{_text(heading)}</h2>",
+        _paragraph(SETUP_NOTE),
+        *(
+            [_paragraph(MODULE_NOTICES[entry["module"]], "core")]
+            if entry["module"] is not None
+            else []
+        ),
         *_facts(record, entry),
         *_core(entry, f"pool-{index}", repeats, trial),
         # A trial has no score, whatever its evaluation computed.
@@ -1202,8 +1266,14 @@ def render(
     with its counts."""
     pools = record["pools"]
     body = []
-    for index, entry in enumerate(pools, start=1):
-        body += _pool(record, entry, index, len(pools), repeats, trial)
+    numbers = entry_numbers(record)
+    for index, (entry, (given, number, total)) in enumerate(
+        zip(pools, numbers, strict=True), start=1
+    ):
+        heading = (GIVEN_HEADING if given else POOL_HEADING).format(
+            index=number, total=total, setup=_setup(entry)
+        )
+        body += _pool(record, entry, index, heading, repeats, trial)
     digest = sha256(encode(record))[:12]
     lines = [
         "<!doctype html>",

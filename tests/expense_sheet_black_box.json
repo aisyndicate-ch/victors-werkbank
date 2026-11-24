@@ -1,0 +1,39 @@
+{
+  "instance": "7bf5518aaa59e62d",
+  "turns": [
+    [
+      [
+        ["view_sheet", {}],
+        ["add_entry", {"receipt": "R-59042", "amount": 40.0}],
+        ["add_entry", {"receipt": "R-62013", "amount": 13.59}],
+        ["add_entry", {"receipt": "R-12238", "amount": 23.0}]
+      ],
+      [
+        ["add_entry", {"receipt": "R-63163", "amount": 40.0}],
+        ["add_entry", {"receipt": "R-85098", "amount": 79.11}],
+        ["add_entry", {"receipt": "R-44581", "amount": 8.66}],
+        ["view_sheet", {}]
+      ]
+    ],
+    [
+      [
+        ["add_entry", {"receipt": "R-10823", "amount": 40.0}],
+        ["add_entry", {"receipt": "R-68306", "amount": 12.96}],
+        ["add_entry", {"receipt": "R-39388", "amount": 23.0}],
+        ["add_entry", {"receipt": "R-70842", "amount": 80.69}]
+      ],
+      [
+        ["view_sheet", {}]
+      ]
+    ],
+    [
+      [
+        ["change_entry", {"entry": "E4", "amount": 57.97}],
+        ["view_sheet", {}]
+      ],
+      [
+        ["close_sheet", {}]
+      ]
+    ]
+  ]
+}

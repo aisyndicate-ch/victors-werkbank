@@ -775,8 +775,8 @@ PROBE = {
 
 def visible(case: Any) -> Desk:
     """Every company's records and the register, as a fresh case of the same
-    class returns them."""
-    fresh = type(case)()
+    class and instance returns them."""
+    fresh = type(case)(case.instance)
     desk = Desk(fresh.prompt)
     for company in sorted({e.company for e in desk.register}):
         result = fresh.call("request_records", {"company": company})
@@ -788,8 +788,8 @@ def package(
     case: Any, applicant: str, company: str, persons: list[str]
 ) -> SimpleNamespace:
     """A booking of `company` for `applicant` with `persons`: the package it
-    hands over, from a fresh case of the same class."""
-    result = type(case)().call(
+    hands over, from a fresh case of the same class and instance."""
+    result = type(case)(case.instance).call(
         "book_applicant",
         {"applicant": applicant, "company": company, "persons": [PROBE]},
     )

@@ -20,8 +20,9 @@ view alone: it starts nothing and writes nothing.
 The command prints an address with this session's token, for example
 `http://127.0.0.1:41733/?token=…`, and serves until Ctrl-C. Open it in a browser on
 the same machine; under WSL2 the Windows browser reaches it as well, as
-`127.0.0.1` or `localhost` ([platforms](PLATFORMS.md#wsl2)). Nothing opens a
-browser for you.
+`127.0.0.1` or `localhost` ([platforms](PLATFORMS.md#wsl2)), and in a Lima VM on a
+Mac the Mac's browser opens the printed address, as Lima forwards the port
+([macOS](PLATFORMS.md#macos-experimental)). Nothing opens a browser for you.
 
 - `werkbank start --browser` takes the flags of `werkbank start` (not `--yes`):
   they become the defaults of the form, and what the form does not offer
@@ -51,7 +52,8 @@ texts as at the terminal:
    terminal (several servers or models, the mode, three passes or one for Quick,
    Normal and Full, the confirmation to start)
    appears as one pending question, under the lines the start said before it.
-2. **Passes.** Each pass is a `werkbank run` child process, as at the terminal.
+2. **Passes.** Each pass is a `werkbank run` child process, as at the terminal,
+   and draws its own [instance value](READING_RESULTS.md#instance-values).
    The page shows, per pass, the episodes the run has reported with their status
    and reason, and the log. It stays current by itself: every five seconds the
    interface's script reads the page again and puts in what changed, and the log
@@ -62,7 +64,7 @@ texts as at the terminal:
 3. **Evaluation and result.** The evaluation and the result page are written into
    the series folder as `werkbank start` writes them, and the page is shown inside
    the interface.
-4. **Submission.** After the three passes of Quick, Normal or Full the start offers to
+4. **Submission.** After the three passes of Quick, Normal, Full or German the start offers to
    submit, as at the terminal; a trial or a single pass is never offered, and its
    series page shows no submission step. See [submitting](#submitting).
 
@@ -95,7 +97,9 @@ of `werkbank submit` apply unchanged.
   are not followed and hidden directories are skipped. The list shows each run's
   model, cases, whether this build wrote it and whether `run.json` exists, read
   from its files as written.
-- **A run:** the run's state under this build, then its report:
+- **A run:** the run's state under this build, then its report, which names the
+  run's [instance value](READING_RESULTS.md#instance-values) and whether it was
+  drawn or given:
   - *complete*: this build validated the run as `werkbank validate` does, and the
     report is rendered from the validated records exactly as `werkbank report`
     renders it, in memory only;
@@ -110,7 +114,8 @@ of `werkbank submit` apply unchanged.
 - **An evaluation:** checked as `werkbank validate EVAL` checks it without
   sources (shape, consistency, every file's digest, and the renderings when this
   build wrote it), then `evaluation.md`, the model card, the dataset card and every
-  CSV table. A file is shown only while it still has the digest the record binds.
+  CSV table, with each pool's instance values beside its seeds as those files hold
+  them. A file is shown only while it still has the digest the record binds.
 - **A result page:** the `result` directory beside an evaluation, as a series has
   it, only while it is exactly what this build renders for that evaluation. It is
   shown in its own dark scheme whatever the browser prefers; the file on disk is

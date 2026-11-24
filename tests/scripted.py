@@ -37,8 +37,8 @@ def reply(name=None, args=None, *, usage=10, finish=None):
 
 class Scripted:
     model = "offline-scripted-control"
-    # The run records temperature 0, as `--temperature 0` sends it, so one run
-    # of a fixture is evaluable; a server-default run sets `sampling = {}`.
+    # The run records temperature 0, as `--temperature 0` sends it; a
+    # server-default run sets `sampling = {}`.
     sampling = {"temperature": 0}
 
     def __init__(self, replies):

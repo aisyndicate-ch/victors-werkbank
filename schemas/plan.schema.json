@@ -1,15 +1,15 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:werkbank:plan:0.2.0",
-  "title": "Run plan (plan.json, run contract harbor-run-v4)",
+  "title": "Run plan (plan.json, run contract harbor-run-v6)",
   "description": "Written exclusively before the first trial: identity, provenance and the resolved lifecycle of every episode. A run with a plan but no run.json was interrupted.",
   "type": "object",
   "properties": {
     "format": {
-      "const": "werkbank-plan-v3"
+      "const": "werkbank-plan-v4"
     },
     "run_contract_version": {
-      "const": "harbor-run-v4"
+      "const": "harbor-run-v6"
     },
     "comparison_eligible": {
       "const": false
@@ -30,6 +30,27 @@
       },
       "minItems": 1,
       "uniqueItems": true
+    },
+    "instance": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{16}$"
+        },
+        "source": {
+          "enum": [
+            "drawn",
+            "given"
+          ]
+        }
+      },
+      "required": [
+        "value",
+        "source"
+      ],
+      "additionalProperties": false,
+      "description": "The run's instance value, from which every case with a generator builds its data, and whether it was drawn for this run or given to repeat another run's data. A run with a given value enters no pool."
     },
     "image": {
       "type": "string",
@@ -136,10 +157,11 @@
     },
     "serving": {
       "type": "object",
-      "description": "Endpoint fingerprint with the server's default chat template variables, serving host, owner note and serving identity (werkbank-serving-v5; werkbank-serving-v4 and werkbank-serving-v3 records are read unchanged).",
+      "description": "Endpoint fingerprint with the server's default chat template variables, serving host, owner note and serving identity (werkbank-serving-v6; werkbank-serving-v5, werkbank-serving-v4 and werkbank-serving-v3 records are read unchanged).",
       "properties": {
         "format": {
           "enum": [
+            "werkbank-serving-v6",
             "werkbank-serving-v5",
             "werkbank-serving-v4",
             "werkbank-serving-v3"
@@ -299,6 +321,7 @@
     "harbor",
     "harness_sha256",
     "image",
+    "instance",
     "max_tokens_per_call",
     "model_id",
     "reasoning_history_policy",

@@ -1,5 +1,5 @@
 """The verifier container's grader and the verdicts that map a trial to a
-werkbank result, without Harbor imports (run contract `harbor-run-v4`).
+werkbank result, without Harbor imports (run contract `harbor-run-v6`).
 
 The grader replays the uploaded episode with the recording build's files (the
 task package's domain): a host-simulated episode is confirmed exactly as

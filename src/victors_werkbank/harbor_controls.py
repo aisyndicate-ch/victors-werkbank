@@ -1,14 +1,24 @@
-"""Pure, tools-free M02 smoke grading; not the production agent-loop contract."""
+"""Pure, tools-free M02 smoke grading; not the production agent-loop contract.
+
+The smoke runs M02's example instance (`variants.EXAMPLE`): it is a readiness
+check of Harbor, Docker and the image, not a run, so it has no instance value of
+its own, and the example's prompt and answers are the ones the committed task
+package and the tests know. It sends the case's prompt without the agent loop's
+limits text, since no loop runs."""
+
+import copy
 
 from .agent.transport import EndpointError, parse_reply, strict_json
-from .domains.algebra import DomainAlgebra
+from .domains.algebra import DomainAlgebra, fixture, radical
 
-# Fixed smoke answer, not independent oracle validation; never mounted for the agent.
-GOLD = {
-    "u": {"kind": "all_except", "values": ["1", "5/2"]},
-    "v": {"roots": ["4"]},
-    "w": {"roots": ["-7"]},
-}
+# The example's prompt, its expected answer and a wrong answer that keeps the
+# extraneous root of v. Computed from the case's fixture, not independent
+# oracle validation; never mounted for the agent. Each answer is a copy of its
+# own, so changing one never changes the other.
+PROMPT = fixture().prompt
+GOLD = fixture().answer
+WRONG = copy.deepcopy(GOLD)
+WRONG["v"] = {"roots": [str(x) for x in radical(fixture().equations.v)[0]]}
 
 
 def grade_smoke_response(raw: bytes) -> dict[str, bool]:

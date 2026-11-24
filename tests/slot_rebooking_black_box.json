@@ -1,0 +1,85 @@
+{
+ "instance": "a81b2e17d0567b13",
+ "responses": [
+  [
+   [
+    "order",
+    {
+     "order": "D-8188"
+    }
+   ]
+  ],
+  [
+   [
+    "slots",
+    {
+     "day": "thu"
+    }
+   ]
+  ],
+  [
+   [
+    "handling",
+    {
+     "kind": "chilled"
+    }
+   ]
+  ],
+  [
+   [
+    "handling",
+    {
+     "kind": "ambient"
+    }
+   ]
+  ],
+  [
+   [
+    "handling",
+    {
+     "kind": "heavy"
+    }
+   ]
+  ],
+  [
+   [
+    "reserve",
+    {
+     "slot": "thu-07"
+    }
+   ]
+  ],
+  [
+   [
+    "slots",
+    {
+     "day": "fri"
+    }
+   ]
+  ],
+  [
+   [
+    "reserve",
+    {
+     "slot": "fri-10"
+    }
+   ]
+  ],
+  [
+   [
+    "release",
+    {
+     "slot": "wed-15"
+    }
+   ]
+  ],
+  [
+   [
+    "confirm",
+    {
+     "slot": "fri-10"
+    }
+   ]
+  ]
+ ]
+}

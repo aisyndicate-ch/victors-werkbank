@@ -6,9 +6,10 @@ It builds the analyzer periods from the standardizations and the optical
 invoices, the comparisons from the retest log, finds what the records leave
 unconnected, plans retests by searching its own model of the controller and the
 notices, and reads the files again before each retest, so a plan always starts
-from what stands now. It imports nothing from the case's truth. Each name in
-`BELIEFS` swaps one reading for a plausible wrong one (the shortcut audit in
-the case contract of DA06)."""
+from what stands now. It imports nothing from the case's truth. Its search
+breaks ties by the analyzers' names and the lots' numbers, which every
+instance orders as the example does. Each name in `BELIEFS` swaps one reading
+for a plausible wrong one (the shortcut audit of DA06)."""
 
 import csv
 import io
@@ -223,15 +224,16 @@ class Model:
         return {p for p in self.periods if _find(parent, p) == root}
 
     def _state(self, plan):
-        """What decides everything a longer plan can reach."""
+        """What decides everything a longer plan can reach, and the number of
+        periods `plan` reaches."""
         parent, windows, reads = self.play(plan)
         live = [ORIGIN, *self.periods, *(windows[a] for a in sorted(windows))]
+        roots = {node: _find(parent, node) for node in live}
         first = {}
-        classes = tuple(
-            first.setdefault(_find(parent, node), i) for i, node in enumerate(live)
-        )
+        classes = tuple(first.setdefault(roots[node], i) for i, node in enumerate(live))
         used = frozenset(lot for lot, _ in plan)
-        return used, tuple(sorted(reads.items())), classes
+        count = sum(1 for p in self.periods if roots[p] == roots[ORIGIN])
+        return (used, tuple(sorted(reads.items())), classes), count
 
     def _usable(self, plan):
         used = [lot for lot, _ in plan]
@@ -259,17 +261,16 @@ class Model:
         the states a plan can lead to."""
         target = len(self.periods)
         best, best_count = [], len(self.reached([]))
-        frontier, seen = [[]], {self._state([])}
+        frontier, seen = [[]], {self._state([])[0]}
         for _ in range(DEPTH):
             following = []
             for plan in frontier:
                 for read in self._steps(plan):
                     step = [*plan, read]
-                    state = self._state(step)
+                    state, count = self._state(step)
                     if state in seen:
                         continue
                     seen.add(state)
-                    count = len(self.reached(step))
                     if count > best_count:
                         best, best_count = step, count
                     following.append(step)

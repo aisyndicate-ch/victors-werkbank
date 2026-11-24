@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:werkbank:episode:0.2.0",
-  "title": "Episode record (episodes/<name>/episode.json, run contract harbor-run-v4)",
+  "title": "Episode record (episodes/<name>/episode.json, run contract harbor-run-v6)",
   "description": "One Harbor trial's verdict, the unit a regrade grades. Without evidence the result is not_run (after a stop) or invalid/evidence_ungradable, never passed.",
   "type": "object",
   "properties": {

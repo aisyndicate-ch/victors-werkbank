@@ -6,17 +6,19 @@ shape and consistency, never authenticated. A reported local filesystem path
 is stored as its last component plus the SHA-256 of the full path, so no host
 path is recorded.
 
-Format v5 probes one engine endpoint for vLLM (`/version`), llama.cpp
-(`/props`) and SGLang (`/get_server_info`) and keeps the engine settings that
-response carries, the server's default chat template variables included; for
+Format v6 probes one engine endpoint for vLLM (`/version`), llama.cpp
+(`/props`), SGLang (`/get_server_info`), Ollama (`/api/version`) and LM Studio
+(`/api/v1/models`) and keeps the engine settings that response carries, the
+server's default chat template variables included; for
 an endpoint on loopback it reads the product name and memory of this host's
 NVIDIA accelerators; it records an optional hardware label, takes the rest of
 the serving-host hardware from the owner note (format v2) and hashes the run
 configuration (identity sampling, per-response cap, harness digest and
 streaming mode) into the identity, so a streamed run never shares an identity
-with a non-streamed one. Format v4 records, which have no default template
-variables, and format v3 records, which have neither engine settings nor a
-host section, are read unchanged, so their identities stay as recorded.
+with a non-streamed one. Format v5 records, which probed vLLM, llama.cpp and
+SGLang only, format v4 records, which also have no default template variables,
+and format v3 records, which have neither engine settings nor a host section,
+are read unchanged, so their identities stay as recorded.
 """
 
 import hashlib
@@ -41,7 +43,9 @@ from .agent.measurements import (
 )
 from .agent.transport import EndpointError, strict_json
 
-SERVING_FORMAT = "werkbank-serving-v5"
+SERVING_FORMAT = "werkbank-serving-v6"
+# Read unchanged: an engine probe for vLLM, llama.cpp and SGLang only.
+SERVING_FORMAT_V5 = "werkbank-serving-v5"
 # Read unchanged: no default template variables.
 SERVING_FORMAT_V4 = "werkbank-serving-v4"
 # Read unchanged: no engine settings, no host section, and a digest only for a
@@ -98,11 +102,20 @@ HARDWARE_CLASSES = {
     (128, "unified"): "128gb-unified",
 }
 # `owned_by` of /v1/models -> runtime name and its one read-only engine probe.
+# Ollama lists a model's namespace there, `library` for a model of its own
+# library; a model of another namespace is not identified. LM Studio lists the
+# fixed `organization_owner`. The mlx-lm server lists no `owned_by` and has no
+# read-only endpoint that reports its version or settings, so it is never
+# identified; a serving note states it.
 RUNTIMES = {
     "vllm": ("vllm", "version"),
     "llamacpp": ("llama.cpp", "props"),
     "sglang": ("sglang", "get_server_info"),
+    "library": ("ollama", "api/version"),
+    "organization_owner": ("lmstudio", "api/v1/models"),
 }
+# The runtimes formats v3 to v5 identified; their records are checked by them.
+RUNTIMES_V5 = {key: RUNTIMES[key] for key in ("vllm", "llamacpp", "sglang")}
 # Engine settings kept verbatim where the engine response carries them (the
 # server arguments SGLang reports); null where it does not.
 ENGINE_SETTINGS = ("quantization", "kv_cache_dtype", "speculative_decoding")
@@ -132,6 +145,24 @@ ENGINE_KEYS_V4 = {
 }
 ENGINE_KEYS = ENGINE_KEYS_V4 | {TEMPLATE_DEFAULTS}
 ENGINE_KEYS_V3 = ENGINE_KEYS_V4 - set(ENGINE_SETTINGS)
+# The engine fields each probe can report; every other one stays null. A
+# version probe always reports its version. vLLM's and Ollama's version
+# endpoints report nothing else; LM Studio reports no version, and the
+# quantization and per-request context of the listed model.
+VERSION_PROBES = ("version", "api/version")
+PROBE_FIELDS = {
+    "version": {"version"},
+    "api/version": {"version"},
+    "props": {"version", "context_tokens", "model_path"},
+    "get_server_info": {
+        "version",
+        "context_tokens",
+        "model_path",
+        *ENGINE_SETTINGS,
+        TEMPLATE_DEFAULTS,
+    },
+    "api/v1/models": {"context_tokens", "quantization"},
+}
 HOST_KEYS = {"label", "accelerators", "reason"}
 # This host's NVIDIA accelerators, read once for an endpoint on loopback: one
 # bounded query of product name and total memory, never UUID, serial, bus,
@@ -679,14 +710,76 @@ def _template_defaults(response: dict[str, Any]) -> dict[str, Any]:
     return {"variables": None, "sha256": found, "reason": DEFAULTS_OUTSIDE_RULE}
 
 
-def _extract(path: str, response: object) -> dict[str, Any]:
+def _optional_dict(item: dict[str, Any], key: str) -> dict[str, Any]:
+    """An optional object field: absent or null is empty, any other value
+    than an object is invalid."""
+    value = item.get(key)
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise _Invalid
+    return value
+
+
+def _objects(value: object) -> list[dict[str, Any]]:
+    """A bounded list of objects, or invalid."""
+    if not isinstance(value, list) or len(value) > MAX_LISTED:
+        raise _Invalid
+    if not all(isinstance(item, dict) for item in value):
+        raise _Invalid
+    return value
+
+
+def _lmstudio(response: dict[str, Any], model: str) -> dict[str, Any]:
+    """LM Studio's model list (`/api/v1/models`): the model whose loaded
+    instance is the served model, or, when none is loaded under that name, the
+    model whose key it is. Its quantization's name is kept, and the context a
+    loaded instance was loaded with; the model's trained maximum is not what a
+    request can use. A model listed twice is invalid, an absent one reports
+    nothing."""
+    models = _objects(response.get("models"))
+    loaded = []
+    for item in models:
+        instances = item.get("loaded_instances")
+        if instances is None:
+            continue
+        loaded += [
+            (item, instance)
+            for instance in _objects(instances)
+            if instance.get("id") == model
+        ]
+    if len(loaded) > 1:
+        raise _Invalid
+    context = None
+    if loaded:
+        item, instance = loaded[0]
+        context = _field(_optional_dict(instance, "config"), "context_length", "count")
+    else:
+        keyed = [item for item in models if item.get("key") == model]
+        if len(keyed) > 1:
+            raise _Invalid
+        if not keyed:
+            return {"context_tokens": None, "quantization": None}
+        item = keyed[0]
+    quantization = _field(_optional_dict(item, "quantization"), "name", "plain")
+    return {"context_tokens": context, "quantization": quantization}
+
+
+def _extract(path: str, response: object, model: str) -> dict[str, Any]:
     if not isinstance(response, dict):
         raise _Invalid
     unreported = {
         **dict.fromkeys(ENGINE_SETTINGS),
         TEMPLATE_DEFAULTS: _no_defaults(DEFAULTS_NOT_REPORTED),
     }
-    if path == "version":
+    if path == "api/v1/models":
+        return {
+            "version": None,
+            "model_path": None,
+            **unreported,
+            **_lmstudio(response, model),
+        }
+    if path in VERSION_PROBES:
         version = _field(response, "version", "plain")
         if version is None:
             raise _Invalid
@@ -720,7 +813,9 @@ def _extract(path: str, response: object) -> dict[str, Any]:
     }
 
 
-def _probe_engine(probe: Any, entry: dict[str, Any] | None) -> dict[str, Any]:
+def _probe_engine(
+    probe: Any, entry: dict[str, Any] | None, model: str
+) -> dict[str, Any]:
     """At most one read-only engine probe, chosen by the reported `owned_by`."""
     if entry is None:
         return _engine_failure(None, NOT_REQUESTED)
@@ -728,13 +823,13 @@ def _probe_engine(probe: Any, entry: dict[str, Any] | None) -> dict[str, Any]:
     if known is None:
         return _engine_failure(None, OTHER_RUNTIME)
     runtime, path = known
-    limit = VERSION_BYTES if path == "version" else ENGINE_BYTES
+    limit = VERSION_BYTES if path in VERSION_PROBES else ENGINE_BYTES
     try:
         response = probe(path, root=True, max_bytes=limit, timeout=PROBE_SECONDS)
     except (OSError, ValueError) as error:
         return _engine_failure(runtime, _failure(error, root=True))
     try:
-        fields = _extract(path, response)
+        fields = _extract(path, response, model)
     except _Invalid:
         return _engine_failure(runtime, INVALID_RESPONSE)
     return {"runtime": runtime, **fields, "reason": None}
@@ -765,7 +860,7 @@ def collect_serving(
         engine = _engine_failure(None, NOT_PROBED)
     else:
         models = _probe_models(probe, model)
-        engine = _probe_engine(probe, models["entry"])
+        engine = _probe_engine(probe, models["entry"], model)
     host = _host(endpoint, hardware_label)
     return {
         "format": SERVING_FORMAT,
@@ -854,8 +949,8 @@ def identity(
     engine_keys: set[str] = ENGINE_KEYS,
 ) -> dict[str, Any]:
     """Completeness, consistency and digest of a serving identity
-    (`werkbank-serving-v5`, or `werkbank-serving-v4` with that format's
-    `engine_keys`). The digest is always present: it covers the model entry
+    (`werkbank-serving-v6` and `werkbank-serving-v5`, or `werkbank-serving-v4`
+    with that format's `engine_keys`). The digest is always present: it covers the model entry
     (the served model name where no entry was read), the engine fields and
     settings, the server's default template variables included, the host's
     label and accelerators, the note and the configuration, never a reason."""
@@ -1010,12 +1105,15 @@ def _check_configuration(value: object) -> None:
 
 
 def _check_engine(
-    engine: object, models: dict[str, Any], keys: set[str]
+    engine: object,
+    models: dict[str, Any],
+    keys: set[str],
+    runtimes: dict[str, tuple[str, str]] = RUNTIMES,
 ) -> dict[str, Any]:
     fields = _section(engine, keys)
     runtime, reason = fields["runtime"], fields["reason"]
     entry = models["entry"]
-    known = RUNTIMES.get(entry["owned_by"]) if entry is not None else None
+    known = runtimes.get(entry["owned_by"]) if entry is not None else None
     if models["reason"] == NOT_PROBED:
         _check(fields == _engine_failure(None, NOT_PROBED, keys))
     elif entry is None:
@@ -1027,20 +1125,20 @@ def _check_engine(
         _check(fields == _engine_failure(runtime, reason, keys))
     else:
         _check(runtime == known[0])
+        reported = PROBE_FIELDS[known[1]]
+        for key in ("version", "context_tokens", "model_path", *ENGINE_SETTINGS):
+            if key in keys and fields[key] is not None:
+                _check(key in reported)
         if fields["version"] is not None:
             _check_plain(fields["version"])
-        _check(known[1] != "version" or fields["version"] is not None)
+        _check(known[1] not in VERSION_PROBES or fields["version"] is not None)
         context, path = fields["context_tokens"], fields["model_path"]
         _check(context is None or _is_count(context, 1, MAX_CONTEXT_TOKENS))
         if path is not None:
             _check(isinstance(path, dict))
             _check_name(path)
-        if known[1] == "version":
-            _check(context is None and path is None)
-        # Only SGLang's server arguments carry engine settings.
         for key in sorted(keys & set(ENGINE_SETTINGS)):
             if fields[key] is not None:
-                _check(known[1] == "get_server_info")
                 _check_plain(fields[key])
         if TEMPLATE_DEFAULTS in keys:
             _check_defaults(fields[TEMPLATE_DEFAULTS], known[1])
@@ -1052,7 +1150,7 @@ def _check_defaults(value: object, path: str) -> None:
     with its reason, or neither with its reason; only SGLang reports any."""
     fields = _section(value, TEMPLATE_DEFAULTS_KEYS)
     variables, found, reason = fields["variables"], fields["sha256"], fields["reason"]
-    if path != "get_server_info":
+    if TEMPLATE_DEFAULTS not in PROBE_FIELDS[path]:
         _check(fields == _no_defaults(DEFAULTS_NOT_REPORTED))
     elif variables is not None:
         try:
@@ -1127,7 +1225,7 @@ def _validate_v3(value: dict[str, Any]) -> None:
     fields = _section(value, _V3_KEYS)
     _check(fields["format"] == SERVING_FORMAT_V3)
     models = _check_models(fields["models"])
-    engine = _check_engine(fields["engine"], models, ENGINE_KEYS_V3)
+    engine = _check_engine(fields["engine"], models, ENGINE_KEYS_V3, RUNTIMES_V5)
     note = fields["owner_note"]
     _check_note(note)
     _check(fields["hardware_class"] == hardware_class(note))
@@ -1138,19 +1236,24 @@ def _validate_v3(value: dict[str, Any]) -> None:
 
 def validate_serving(value: object, model_id: object) -> None:
     """Raise ValueError unless value has exactly the collect_serving shape
-    for the run's served model `model_id`, or is a `werkbank-serving-v4` or
-    `werkbank-serving-v3` record as that format wrote it."""
+    for the run's served model `model_id`, or is a `werkbank-serving-v5`,
+    `werkbank-serving-v4` or `werkbank-serving-v3` record as that format wrote
+    it."""
     if isinstance(value, dict) and value.get("format") == SERVING_FORMAT_V3:
         _validate_v3(value)
         return
     fields = _section(value, _V3_KEYS | {"host"})
-    formats = {SERVING_FORMAT: ENGINE_KEYS, SERVING_FORMAT_V4: ENGINE_KEYS_V4}
+    formats = {
+        SERVING_FORMAT: (ENGINE_KEYS, RUNTIMES),
+        SERVING_FORMAT_V5: (ENGINE_KEYS, RUNTIMES_V5),
+        SERVING_FORMAT_V4: (ENGINE_KEYS_V4, RUNTIMES_V5),
+    }
     _check(isinstance(fields["format"], str) and fields["format"] in formats)
-    keys = formats[fields["format"]]
+    keys, runtimes = formats[fields["format"]]
     if not isinstance(model_id, str):
         raise ValueError(INVALID)
     models = _check_models(fields["models"])
-    engine = _check_engine(fields["engine"], models, keys)
+    engine = _check_engine(fields["engine"], models, keys, runtimes)
     host = _check_host(fields["host"])
     note = fields["owner_note"]
     _check_note(note)

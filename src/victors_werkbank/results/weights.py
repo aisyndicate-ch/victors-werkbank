@@ -3,7 +3,7 @@
 A weight profile replaces only the category weights of the overall points;
 category values, bounds and their bootstrap draws never depend on it, and no
 run changes. The standard profile is the design profile's `weights_percent`,
-read from `profiles/core-v0.3.json` and never copied. Reviewed profiles are
+read from `profiles/core-v0.4.json` and never copied. Reviewed profiles are
 package files under `weight_profiles/`: they are evaluation-only data outside
 the harness digest, so a profile alone never splits pools. Own profiles
 (`--weight-profile FILE`) are unreviewed and are recorded by ID and digest,
@@ -22,7 +22,7 @@ from ..core_profile import design_profile, design_profile_sha256
 from ..grading.evidence import sha256
 from ..serving import MAX_TEXT, is_local_path
 
-WEIGHT_FORMAT = "werkbank-weight-profile-v2"
+WEIGHT_FORMAT = "werkbank-weight-profile-v3"
 STANDARD = "standard"
 STANDARD_TITLE = "Standard weights of the design profile"
 DIRECTORY = "weight_profiles"

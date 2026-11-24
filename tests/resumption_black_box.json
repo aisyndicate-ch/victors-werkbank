@@ -1,0 +1,134 @@
+{
+ "instance": "c67b52dc15373070",
+ "calls": [
+  [
+   "inspect",
+   {
+    "resource": "manifest"
+   }
+  ],
+  [
+   "inspect",
+   {
+    "resource": "runbook"
+   }
+  ],
+  [
+   "inspect",
+   {
+    "resource": "receipts"
+   }
+  ],
+  [
+   "inspect",
+   {
+    "resource": "journal"
+   }
+  ],
+  [
+   "inspect",
+   {
+    "resource": "backlog"
+   }
+  ],
+  [
+   "inspect",
+   {
+    "resource": "checkpoint"
+   }
+  ],
+  [
+   "resume",
+   {
+    "job": "siskin"
+   }
+  ],
+  [
+   "apply",
+   {
+    "key": "plover.build",
+    "params": "c342"
+   }
+  ],
+  [
+   "apply",
+   {
+    "key": "siskin.deploy",
+    "params": "75e9"
+   }
+  ],
+  [
+   "apply",
+   {
+    "key": "plover.deploy",
+    "params": "2a88"
+   }
+  ],
+  [
+   "discard",
+   {
+    "job": "linnet",
+    "entry": "q-60"
+   }
+  ],
+  [
+   "resume",
+   {
+    "job": "linnet"
+   }
+  ],
+  [
+   "apply",
+   {
+    "key": "pipit.deploy",
+    "params": "a369"
+   }
+  ],
+  [
+   "apply",
+   {
+    "key": "pipit.announce",
+    "params": "67f5"
+   }
+  ],
+  [
+   "apply",
+   {
+    "key": "curlew.build",
+    "params": "1a8e"
+   }
+  ],
+  [
+   "apply",
+   {
+    "key": "curlew.deploy",
+    "params": "fc88"
+   }
+  ],
+  [
+   "save_checkpoint",
+   {
+    "current": [
+     "curlew.build",
+     "curlew.deploy",
+     "curlew.announce",
+     "dipper.build",
+     "dipper.deploy",
+     "linnet.build",
+     "linnet.deploy",
+     "linnet.mirror",
+     "linnet.announce",
+     "pipit.build",
+     "pipit.deploy",
+     "pipit.announce",
+     "plover.build",
+     "plover.deploy",
+     "plover.announce",
+     "siskin.build",
+     "siskin.deploy",
+     "siskin.mirror"
+    ]
+   }
+  ]
+ ]
+}

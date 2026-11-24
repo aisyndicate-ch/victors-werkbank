@@ -35,7 +35,12 @@ from .agent.transport import (
     is_capacity_rejection,
 )
 from .domains.tools import tool
-from .registry import CASE_SETS, CASES, case_set_name, context_recommendation
+from .registry import (
+    case_set_name,
+    case_sets,
+    context_recommendation,
+    scored_cases,
+)
 from .serving import NOT_LISTED, NOT_PROBED, collect_serving, context_tokens
 
 # Model-visible contract values: the one prompt, tool and tool result sent.
@@ -275,7 +280,7 @@ class Finding:
 
 @dataclass
 class Preflight:
-    """The findings. For all registered cases and, by name, for each case
+    """The findings. For all scored cases and, by name, for each case
     set: the recommended context and the cases whose context need with the
     checked cap exceeds the reported context (none when it is unknown)."""
 
@@ -508,15 +513,15 @@ def check(
     )
     context = context_tokens(serving)
     recommended, short = context_recommendation(
-        tuple(CASES), context, max_tokens_per_call=max_tokens_per_call
+        scored_cases(), context, max_tokens_per_call=max_tokens_per_call
     )
-    case_sets = {
+    coverage = {
         name: context_recommendation(
             case_ids, context, max_tokens_per_call=max_tokens_per_call
         )
-        for name, case_ids in CASE_SETS.items()
+        for name, case_ids in case_sets().items()
     }
-    result = Preflight(serving, context, recommended, short, case_sets)
+    result = Preflight(serving, context, recommended, short, coverage)
     result.thinking = template_text(sampling or {})
     checks = result.checks
     replies: list[Reply] = []
@@ -607,11 +612,11 @@ ALL_CASES = "all cases"
 
 
 def _scopes(result: Preflight) -> list[tuple[str, int, list[str]]]:
-    """Each case set, then all registered cases unless a case set holds them
-    all: its name, recommended context and the cases that need more than the
-    reported context."""
+    """Each case set, then all scored cases (what `run --all` runs) unless a
+    case set holds them all: its name, recommended context and the cases
+    that need more than the reported context."""
     scopes = [(name, *coverage) for name, coverage in result.case_sets.items()]
-    if case_set_name(tuple(CASES)) is None:
+    if case_set_name(scored_cases()) is None:
         scopes.append(
             (ALL_CASES, result.recommended_context, result.cases_needing_more_context)
         )
@@ -619,7 +624,7 @@ def _scopes(result: Preflight) -> list[tuple[str, int, list[str]]]:
 
 
 def _context_line(result: Preflight) -> str:
-    """The reported context and, for each case set and for all registered
+    """The reported context and, for each case set and for all scored
     cases, whether it covers every need with the checked cap or which cases
     need more, so a tester sees which selection the server can run as it
     is. A need is a measured one, so a covered selection says so: a model

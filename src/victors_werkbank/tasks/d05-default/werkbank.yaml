@@ -1,0 +1,6 @@
+{
+  "case_id": "D05",
+  "branch_id": "default",
+  "executor": "host",
+  "grading": "replay"
+}

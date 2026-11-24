@@ -694,6 +694,10 @@ class Registry(unittest.TestCase):
                         "C08": (6, 12, 5.0),
                         "C09": (24, 27, 20.0),
                         "DA05": (8, 12, 5.0),
+                        "C11": (8, 12, 5.0),
+                        "C12": (8, 12, 5.0),
+                        "C13": (12, 27, 5.0),
+                        "DA07": (8, 12, 5.0),
                     }.get(cid, (0, 0, 5.0)),
                 )
                 self.assertEqual(contract.wall_seconds, derived_wall_seconds(contract))
@@ -704,7 +708,7 @@ class Registry(unittest.TestCase):
         self.assertEqual(CodeEpisode(case, 12.0).call("run", {}, timeout=2.0), 2.0)
         for cid in (
             *("C04", "C07", "S04", "DA03", "DA04", "C08", "DA05", "DA02", "DA06"),
-            *("C01", "C09", "C10"),
+            *("C01", "C09", "C10", "C11", "C12", "C13", "DA07"),
         ):
             with self.subTest(allowance=cid), tempfile.TemporaryDirectory() as tmp:
                 episode = CATALOG[cid].build(

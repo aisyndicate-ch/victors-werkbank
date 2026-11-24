@@ -22,8 +22,9 @@ from test_comparison import SGLang, profile_file
 from test_evaluation import Refusing, Served
 from test_replay_grade import script
 
-from victors_werkbank import registry
+from victors_werkbank import cli, registry
 from victors_werkbank.grading.evidence import encode, sha256
+from victors_werkbank.results import comparison as cmp
 from victors_werkbank.results import evaluation as ev
 from victors_werkbank.results import evaluation_check as check
 from victors_werkbank.results import tables, weights
@@ -64,6 +65,7 @@ SCALARS = {
     "revision": {"type": "string", "pattern": "^([0-9a-f]{40}|sha256:[0-9a-f]{64})$"},
     "image": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "tool": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$"},
+    "instance": {"type": "string", "pattern": "^[0-9a-f]{16}$"},
 }
 CONSTRAINTS = ("type", "minimum", "maximum", "minLength", "maxLength", "pattern")
 
@@ -147,8 +149,8 @@ class Shape(unittest.TestCase):
         agree(self, SCHEMA, check.SHAPE)
 
     def test_rankings_and_views_name_their_configuration_as_pools_do(self):
-        self.assertEqual(SCHEMA["$id"], "urn:werkbank:evaluation:9.0.0")
-        self.assertEqual(ev.EVALUATION_FORMAT, "werkbank-evaluation-v9")
+        self.assertEqual(SCHEMA["$id"], "urn:werkbank:evaluation:12.0.0")
+        self.assertEqual(ev.EVALUATION_FORMAT, "werkbank-evaluation-v13")
         pool = check.SHAPE["pools"][1]
         grouped = {"harness_sha256": pool["configuration"]["harness_sha256"]}
         for section in ("separability", "pareto"):
@@ -190,10 +192,15 @@ class Exports(unittest.TestCase):
             return path
 
         gold = ("gold", "gold", "gold", "gold")
+        # Two pools of three runs each, as scores need.
         cls.runs = [
             record("vllm0", Served, gold, 0),
             record("vllm1", Served, ("gold", "fail", "gold", "gold"), 1),
-            record("sglang", SGLang, gold, 0, tool_call_parser="qwen25"),
+            record("vllm2", Served, gold, 2),
+            *[
+                record(f"sglang{seed}", SGLang, gold, seed, tool_call_parser="qwen25")
+                for seed in range(3)
+            ],
         ]
         cls.weights = cls.root / "weights.json"
         cls.weights.write_bytes(profile_file())
@@ -268,7 +275,7 @@ class Exports(unittest.TestCase):
                 io.StringIO((self.output / tables.DATA / "outcomes.csv").read_text())
             )
         )
-        self.assertEqual(len(rows), 3 * 4)
+        self.assertEqual(len(rows), 6 * 4)
         security = [row for row in rows if row["case_id"] == "S05"]
         self.assertEqual(
             {row["observed_security_violation"] for row in security}, {"false"}
@@ -332,7 +339,11 @@ class Exports(unittest.TestCase):
                     str(entry["reasoning"]["with_reasoning"]),
                 ),
             )
-        self.assertIn("one row per pool: serving settings, reasoning counts", card)
+        self.assertIn(
+            "one row per pool, or per entry of runs with a given instance value:"
+            " serving settings, reasoning counts, seeds, instance values, flags,",
+            card,
+        )
         model_card = (self.output / tables.MODEL_CARD).read_text()
         for entry in self.record["pools"]:
             self.assertIn(
@@ -410,6 +421,71 @@ class Exports(unittest.TestCase):
             "No two pools share a build, case set and hardware statement; a pool"
             " without a hardware statement is in no Pareto view.",
             empty,
+        )
+
+    def test_the_difference_of_two_pools_stands_beside_their_pair(self):
+        (pair,) = self.record["comparisons"]
+        (item,) = self.record["differences"]
+        pools = {entry["key"]: entry for entry in self.record["pools"]}
+        self.assertEqual(
+            [item["first"], item["second"]],
+            [entry["key"] for entry in sorted(pools.values(), key=cmp.rank_order)],
+        )
+        self.assertEqual(item["case_ids"], self.record["pools"][0]["case_ids"])
+        # The same numbers as the pair, in the difference's order.
+        same = pair["first"] == item["first"]
+        for category, row in item["categories"].items():
+            other = pair["categories"][category]
+            self.assertEqual(row["paired_families"], other["paired_families"])
+            self.assertAlmostEqual(row["delta"], other["delta"] * (1 if same else -1))
+            wins = (row["first_better"], row["second_better"])
+            self.assertEqual(
+                wins if same else wins[::-1],
+                (other["first_better"], other["second_better"]),
+            )
+        # The cases are no scored set: no points, but the wins.
+        self.assertIsNotNone(pair["overall"]["points"])
+        self.assertIsNone(item["overall"]["points"])
+        self.assertEqual(
+            item["overall"]["ties"],
+            sum(row["ties"] for row in item["categories"].values()),
+        )
+        data = (self.output / tables.DATA / "differences.csv").read_text()
+        rows = list(csv.DictReader(io.StringIO(data, newline="")))
+        self.assertEqual(
+            [row["category"] for row in rows], [*item["categories"], "overall"]
+        )
+        self.assertEqual(
+            {(r["first"], r["second"]) for r in rows}, {(item["first"], item["second"])}
+        )
+        self.assertEqual(rows[-1]["delta"], "")
+        markdown = (self.output / ev.MARKDOWN).read_text()
+        self.assertIn(
+            f"## Paired differences\n\n### `{item['first'][:12]}` minus"
+            f" `{item['second'][:12]}`\n",
+            markdown,
+        )
+        self.assertIn("Not separable: the paired interval of the two pools", markdown)
+        card = (self.output / tables.CARD).read_text()
+        self.assertIn("paired differences of every two evaluated pools", card)
+        empty, _ = ev.render({**self.record, "differences": []})
+        self.assertIn("No two evaluated pools share a build and case set.", empty)
+        # The console names the pools by their numbers, overall only.
+        self.assertEqual(cli._difference_lines(self.record), [])
+        record = copy.deepcopy(self.record)
+        record["differences"][0]["overall"].update(
+            points=12.5, interval=[1.25, 20.0], share_above_zero=0.995
+        )
+        first = 1 + [e["key"] for e in record["pools"]].index(item["first"])
+        self.assertEqual(
+            cli._difference_lines(record),
+            [
+                "Paired differences overall (first minus second, 95% interval):",
+                f"  Pool {first} minus pool {3 - first}: +12.5 [+1.2, +20.0] points,"
+                " above 0 in 99.5% of resamples; cases better / worse / tied"
+                f" {item['overall']['first_better']} /"
+                f" {item['overall']['second_better']} / {item['overall']['ties']}",
+            ],
         )
 
     def test_no_path_endpoint_raw_response_or_free_serving_text(self):
@@ -496,6 +572,58 @@ class Exports(unittest.TestCase):
         self.assertFalse(check.check_evaluation(target, list(self.runs))[1])
         shutil.rmtree(target)
 
+    def test_a_patch_release_keeps_the_evaluation(self):
+        # The version number is outside the harness digest: after a release
+        # that changes only it, an evaluation of the same build still checks
+        # completely and keeps the number it was written with.
+        self.assertTrue(check.check_evaluation(self.output, list(self.runs))[1])
+        with mock.patch.object(ev, "__version__", "99.0.1"):
+            self.assertTrue(check.this_build(self.record))
+            record, complete = check.check_evaluation(self.output, list(self.runs))
+        self.assertTrue(complete)
+        self.assertEqual(record["evaluator"], self.record["evaluator"])
+
+    def test_a_new_label_or_list_keeps_the_runs_and_rewrites_the_evaluation(self):
+        # The profile (labels, titles, summaries, weights) and the case sets
+        # are data outside the harness digest: after a change the same runs
+        # stay readable and evaluate again, and an evaluation written before
+        # it is another build's until `compare` writes it again.
+        from victors_werkbank import core_profile
+
+        profile = json.loads(core_profile._profile_bytes())
+        profile["cases"][0]["difficulty_target"] = "very_hard"
+        profile["cases"][0]["title"] += " again"
+        changed = json.dumps(profile).encode()
+        target = self.root / "labels"
+        with (
+            mock.patch.object(core_profile, "_profile_bytes", lambda: changed),
+            mock.patch.dict(registry.case_sets(), {"duo-v1": ("A06", "M02")}),
+        ):
+            record = ev.write_evaluation(self.runs, target, resamples=200)
+            self.assertTrue(check.this_build(record))
+            self.assertTrue(check.check_evaluation(target, list(self.runs))[1])
+            self.assertFalse(check.this_build(self.record))
+        written, ours = record["evaluator"], self.record["evaluator"]
+        self.assertEqual(written["harness_sha256"], ours["harness_sha256"])
+        self.assertNotEqual(written["case_sets_sha256"], ours["case_sets_sha256"])
+        self.assertNotEqual(
+            record["profile"]["design_profile_sha256"],
+            self.record["profile"]["design_profile_sha256"],
+        )
+        self.assertEqual(
+            [entry["runs"] for entry in record["pools"]],
+            [entry["runs"] for entry in self.record["pools"]],
+        )
+        self.assertTrue(check.this_build(self.record))
+        self.assertFalse(check.this_build(record))
+        self.assertFalse(check.check_evaluation(target, list(self.runs))[1])
+        shutil.rmtree(target)
+        # Either change alone is another build's data.
+        with mock.patch.object(core_profile, "_profile_bytes", lambda: changed):
+            self.assertFalse(check.this_build(self.record))
+        with mock.patch.dict(registry.case_sets(), {"duo-v1": ("A06", "M02")}):
+            self.assertFalse(check.this_build(self.record))
+
     def test_corrupt_or_foreign_files_are_invalid(self):
         def corrupt_csv(root):
             path = root / tables.DATA / "pools.csv"
@@ -534,7 +662,7 @@ class Exports(unittest.TestCase):
 
         def old(root):
             record = json.loads((root / ev.EVALUATION).read_text())
-            record["format"] = "werkbank-evaluation-v8"
+            record["format"] = "werkbank-evaluation-v9"
             (root / ev.EVALUATION).write_bytes(encode(record))
 
         def method(root):
@@ -557,7 +685,7 @@ class Exports(unittest.TestCase):
             (value, "differs from its rendering"),
             (form, "written form"),
             (shape, "documented shape"),
-            (old, "another format than this build's werkbank-evaluation-v9;"),
+            (old, "another format than this build's werkbank-evaluation-v13;"),
             (method, "another method than this build's partial-credit-v2;"),
             (foreign, "documented shape"),
         ):
@@ -587,7 +715,7 @@ class Exports(unittest.TestCase):
     def test_shape_and_consistency_refuse_changed_records(self):
         changes = {
             "an extra key": lambda r: r.update(extra=1),
-            "an older format": lambda r: r.update(format="werkbank-evaluation-v8"),
+            "an older format": lambda r: r.update(format="werkbank-evaluation-v9"),
             "the removed tools category": lambda r: r["profile"][
                 "weights_percent"
             ].update(tools=15),
@@ -661,10 +789,10 @@ class Exports(unittest.TestCase):
                 case_set=""
             ),
             "a case set parameter without its cases": lambda r: r["parameters"].update(
-                case_set={"name": "quick-v3", "case_ids": []}
+                case_set={"name": "quick-v5", "case_ids": []}
             ),
             "a case set parameter with a case twice": lambda r: r["parameters"].update(
-                case_set={"name": "quick-v3", "case_ids": ["A06", "A06"]}
+                case_set={"name": "quick-v5", "case_ids": ["A06", "A06"]}
             ),
             "failure classes without refused_by_endpoint": lambda r: r["pools"][0][
                 "failures"
@@ -710,7 +838,7 @@ class Exports(unittest.TestCase):
             # against the profile's planned cases.
             "scores over a case set the pool is not": lambda r: r["pools"][0][
                 "scores"
-            ].update(case_set="normal-v1"),
+            ].update(case_set="normal-v3"),
             "planned cases that are not the profile's": lambda r: r["pools"][0][
                 "scores"
             ]["categories"]["agentic"].update(planned=7),
@@ -723,6 +851,26 @@ class Exports(unittest.TestCase):
                 with_reasoning=r["pools"][0]["reasoning"]["runs"][0]["responses"] + 1
             ),
             "a pool reference": lambda r: r["comparisons"][0].update(second="f" * 64),
+            "a pair's wins off its categories": lambda r: r["comparisons"][0][
+                "overall"
+            ].update(ties=r["comparisons"][0]["overall"]["ties"] + 1),
+            "a difference's order": lambda r: r["differences"][0].update(
+                first=r["differences"][0]["second"],
+                second=r["differences"][0]["first"],
+            ),
+            "a missing difference": lambda r: r["differences"].clear(),
+            "a difference's build": lambda r: r["differences"][0][
+                "configuration"
+            ].update(harness_sha256="0" * 64),
+            "a difference's points off a scored set": lambda r: r["differences"][0][
+                "overall"
+            ].update(points=1.0),
+            "a difference's wins off its families": lambda r: r["differences"][0][
+                "categories"
+            ]["agentic"].update(ties=9),
+            "a share without an interval": lambda r: r["differences"][0]["categories"][
+                "math"
+            ].update(share_above_zero=0.5),
             "an input pool": lambda r: r["inputs"][0].update(pool="e" * 64),
             "the standard weights": lambda r: r["weight_profiles"][0][
                 "weights_percent"
@@ -782,7 +930,7 @@ class Exports(unittest.TestCase):
             ][0].update(checks_passed=0),
             "more checks passed than recorded": lambda r: r["pools"][0]["cases"][0][
                 "checks"
-            ][0].update(passed=3),
+            ][0].update(passed=99),
             "a recommendation hint without its reason": lambda r: r["pools"][0][
                 "flags"
             ].append("below_recommendation"),
@@ -876,13 +1024,16 @@ class HostileExports(unittest.TestCase):
 
         replies = script("A06", "gold") + script("M02", "gold")
         cls.runs = [
-            record(
-                "hostile",
-                Hostile,
-                replies,
-                {"temperature": 0, "seed": 0},
-                max_tokens_per_call=16384,
-            ),
+            *[
+                record(
+                    f"hostile{seed}",
+                    Hostile,
+                    replies,
+                    {"temperature": 0, "seed": seed},
+                    max_tokens_per_call=16384,
+                )
+                for seed in range(3)
+            ],
             record(
                 "invalid", Refusing, [], {"temperature": 0}, max_tokens_per_call=16384
             ),
@@ -931,7 +1082,8 @@ class HostileExports(unittest.TestCase):
                     inside = line.startswith("|")
         card = (self.output / tables.MODEL_CARD).read_text()
         # Only the flags that leave a pool unevaluated are named as the reason.
-        self.assertIn("- Not evaluated: invalid_result\n", card)
+        # One invalid run is also fewer than the three a pool needs.
+        self.assertIn("- Not evaluated: invalid_result, too_few_repetitions\n", card)
         self.assertIn("- Not evaluated: too_few_repetitions\n", card)
         # Flags and the recommendation stand beside an evaluated pool's table
         # too: below it is a hint, not a reason to leave the pool out.

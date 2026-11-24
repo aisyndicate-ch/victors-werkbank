@@ -5,8 +5,9 @@ repeated, which the page discloses. A trial's `result.json` also holds
 `"trial": true`: its page says it is a trial and no benchmark and shows no
 score, and `werkbank submit` refuses it. A trial is an evaluation of one pass
 in one pool. A single pass of a benchmark mode, which `werkbank start` runs on
-request, holds `"single_pass": true` instead: its page says so, keeps its
-numbers, and `werkbank submit` refuses it too. Any other result has neither
+request, holds `"single_pass": true` instead: its page says so and, like any
+evaluation of one pass, has no core number, and `werkbank submit` refuses it
+too. Any other result has neither
 field, so its form is unchanged.
 
 The evaluation is checked first, and only an evaluation this build wrote is

@@ -28,7 +28,7 @@ INVALID_JSON = "Invalid journal JSON"
 
 def _event(sequence, **change):
     event = dict(
-        schema_version="0.1.0",
+        schema_version="0.2.0",
         run_id="run-1",
         case_id="A06",
         sequence=sequence,
@@ -135,7 +135,7 @@ class Events(unittest.TestCase):
 
     def test_reject_sequence_trust_and_partial_records(self):
         event = dict(
-            schema_version="0.1.0",
+            schema_version="0.2.0",
             run_id="run-1",
             case_id="A06",
             sequence=0,
@@ -150,9 +150,13 @@ class Events(unittest.TestCase):
             {"elapsed_seconds": 10**400},
             {"trust": {}},
             {"kind": "execute_shell"},
+            # A journal of the envelope before the scripted user's turns.
+            {"schema_version": "0.1.0"},
         ]:
             with self.subTest(change=change), self.assertRaises(JournalError):
                 validate_events([dict(event, **change)])
+        # The scripted user's turn is a kind of its own.
+        validate_events([dict(event, kind="user_turn")])
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "events.jsonl"
             path.write_text(json.dumps(event))

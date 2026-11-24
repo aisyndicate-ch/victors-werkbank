@@ -14,6 +14,7 @@ beliefs equals the shown resolver (tests/test_policy_applicability.py). Nothing
 here imports the case module."""
 
 import re
+from functools import cache
 from typing import Any
 
 BELIEFS = {
@@ -107,6 +108,11 @@ def _field(lines: list[str], name: str) -> str:
     return value
 
 
+@cache
+def _compiled(code: str):
+    return compile(code, "<charter resolver>", "exec")
+
+
 class Register:
     def __init__(self, sources: dict[str, list[str]]) -> None:
         self.sources = sources
@@ -114,7 +120,8 @@ class Register:
         start = next(i for i, line in enumerate(charter) if "Resolver, Python" in line)
         code = "\n".join(charter[start + 1 :])
         namespace: dict[str, Any] = {}
-        exec(compile(code, "<charter resolver>", "exec"), namespace)
+        exec(_compiled(code), namespace)
+        self.found: dict[tuple, list] = {}
         self.shown = namespace["governing"]
         self.shown_taken = namespace["places_taken"]
         self.exceptions, self.amendments, self.bulletins = [], [], []
@@ -191,10 +198,17 @@ class Register:
 
     def governing(self, request: dict[str, str], beliefs: frozenset[str]):
         """The shown resolver itself, or its reimplementation with each
-        belief's change."""
-        if not beliefs & RESOLVER_BELIEFS:
-            return self.shown(request, self.exceptions, self.amendments, self.bulletins)
-        return self.changed(request, beliefs)
+        belief's change; one result per request and beliefs, which no caller
+        changes."""
+        key = (request["asset"], request["kind"], request["filed"], beliefs)
+        if key not in self.found:
+            if not beliefs & RESOLVER_BELIEFS:
+                self.found[key] = self.shown(
+                    request, self.exceptions, self.amendments, self.bulletins
+                )
+            else:
+                self.found[key] = self.changed(request, beliefs)
+        return self.found[key]
 
     def changed(self, request: dict[str, str], beliefs: frozenset[str]):
         day = request["filed"]
@@ -420,8 +434,17 @@ def run(
     replies: list[str] = []
     registers = {frozenset(sources): register}
 
+    walks: dict[tuple, dict] = {}
+
     def walk(known=sources):
-        """The final decisions with what is published now."""
+        """The final decisions with what is published now; one walk per
+        register and replies, which no caller changes."""
+        key = (frozenset(known), tuple(replies))
+        if key not in walks:
+            walks[key] = walked(known)
+        return walks[key]
+
+    def walked(known):
         reg = registers.setdefault(frozenset(known), None) or Register(known)
         registers[frozenset(known)] = reg
         sequence = order + later + replies
@@ -488,14 +511,14 @@ def run(
     plan = None
     while True:
         final = walk()
-        walks = [
+        without = [
             walk({k: v for k, v in sources.items() if k != b["id"]})
             for b in register.bulletins
         ]
         todo = [
             r
             for r in fixes
-            if (r not in recorded and due(r, final, walks))
+            if (r not in recorded and due(r, final, without))
             or (not hold_lifts and r in recorded and recorded[r] != final[r][:2])
         ]
         if hold_lifts:

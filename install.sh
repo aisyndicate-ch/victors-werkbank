@@ -55,6 +55,17 @@ for argument in "$@"; do
   esac
 done
 
+# macOS itself is no Linux: Werkbank runs in a Linux VM on the Mac instead.
+if [[ "$(uname -s)" == Darwin ]]; then
+  if ((check)); then
+    exit 1
+  fi
+  echo "install.sh: this is macOS, where Werkbank does not run natively. Nothing" \
+    "was changed. Run it inside a Linux VM on this Mac, with the model server on" \
+    "the Mac (experimental): docs/users/PLATFORMS.md#macos-experimental" >&2
+  exit 1
+fi
+
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 cd -- "$root"
 LOCKS=(requirements-dev.txt requirements-harbor-build.txt requirements-harbor.txt)
@@ -204,12 +215,40 @@ TEXT
   [[ "$answer" == [yY] || "$answer" == [yY][eE][sS] ]]
 }
 
+# Inside a Linux VM, the computer that runs it is not 127.0.0.1. Lima, and
+# Colima built on it, write host.lima.internal into the guest's /etc/hosts at
+# every boot; an OrbStack machine shows the Mac's files at /mnt/mac. Both are
+# only read, never contacted.
+HOSTS=/etc/hosts
+MAC_FILES=/mnt/mac
+newline=$'\n'
+lima_line="${newline}[0-9A-Fa-f.:]+[[:blank:]]+host\\.lima\\.internal([[:blank:]]|${newline})"
+vm=
+if [[ -f "$HOSTS" && -r "$HOSTS" ]] &&
+  [[ "${newline}$(<"$HOSTS")${newline}" =~ $lima_line ]]; then
+  vm=lima
+elif [[ -d "$MAC_FILES" ]]; then
+  vm=orbstack
+fi
+docker_guide="under WSL2 see docs/users/PLATFORMS.md#wsl2"
+relogin="under WSL2: run wsl --shutdown in Windows and open the distribution again"
+case "$vm" in
+  lima)
+    docker_guide="in this VM see docs/users/PLATFORMS.md#macos-experimental"
+    relogin="in a Lima VM: limactl stop and limactl start it"
+    ;;
+  orbstack)
+    docker_guide="in this VM see docs/users/PLATFORMS.md#macos-experimental"
+    relogin="in an OrbStack machine: restart the machine"
+    ;;
+esac
+
 # Prints what keeps Docker from working for this user; nothing when it answers.
 docker_problem() {
   local output user
   if ! command -v docker >/dev/null 2>&1; then
     echo "Docker is not installed: install Docker Engine so that the docker command" \
-      "works for your user (under WSL2 see docs/users/PLATFORMS.md#wsl2)."
+      "works for your user ($docker_guide)."
     return
   fi
   if output=$(timeout 30 docker info --format '{{.ServerVersion}}' 2>&1); then
@@ -219,12 +258,10 @@ docker_problem() {
     user=$(id -un)
     if [[ " $(id -nG "$user") " != *" docker "* ]]; then
       echo "Docker refuses your user: add it to the docker group as administrator" \
-        "(usermod -aG docker $user), then log out and in again (under WSL2: run" \
-        "wsl --shutdown in Windows and open the distribution again)."
+        "(usermod -aG docker $user), then log out and in again ($relogin)."
     elif [[ " $(id -nG) " != *" docker "* ]]; then
       echo "Docker refuses your user: it is in the docker group, but this login" \
-        "session started before that; log out and in again (under WSL2: run" \
-        "wsl --shutdown in Windows and open the distribution again)."
+        "session started before that; log out and in again ($relogin)."
     else
       echo "Docker refuses your user although it is in the docker group; see what" \
         "docker info reports."
@@ -281,6 +318,24 @@ fi
 if [[ -e .git ]] && ! command -v git >/dev/null 2>&1; then
   say "note: git is not installed. This installation does not need it; cloning" \
     "and updating the repository do."
+fi
+
+case "$vm" in
+  lima)
+    say "note: this is a Lima VM (Lima or Colima). A model server on the computer" \
+      "that runs it is reached as host.lima.internal, not 127.0.0.1, for example" \
+      "http://host.lima.internal:11434/v1 (docs/users/PLATFORMS.md#macos-experimental)."
+    ;;
+  orbstack)
+    say "note: this looks like an OrbStack machine. A model server on the Mac is" \
+      "reached as host.orb.internal, not 127.0.0.1, for example" \
+      "http://host.orb.internal:11434/v1 (docs/users/PLATFORMS.md#macos-experimental)."
+    ;;
+esac
+if [[ -n "$vm" && ( "$root" == /Users/* || "$root" == "$MAC_FILES"/* ) ]]; then
+  say "note: this checkout lies in a folder shared from the Mac. Clone it into the" \
+    "VM's own file system, for example under ~, and run it there: a shared folder" \
+    "does not give the locking and fsync Werkbank's evidence files rely on."
 fi
 
 # Providing Python is offered only when it is the one problem left, so that

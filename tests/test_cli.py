@@ -31,10 +31,11 @@ from test_replay_grade import actions_script, script
 from victors_werkbank.agent.transport import API_KEY_VARIABLE
 from victors_werkbank.cli import main
 from victors_werkbank.environment import validate_environment
-from victors_werkbank.integration.tasks import RUN_CASES
-from victors_werkbank.registry import CASE_SETS
+from victors_werkbank.integration.tasks import SCORED_RUN_CASES
+from victors_werkbank.registry import case_sets
 from victors_werkbank.results import outcomes, partial
 from victors_werkbank.serving import NOTE_KEYS, load_note
+from werkbank_result import page as result_page
 
 HARBOR = importlib.util.find_spec("harbor") is not None
 RUN_ARGUMENTS = [
@@ -172,12 +173,15 @@ class CLI(unittest.TestCase):
         self.assertIn("streamed and non-streamed runs form separate pools", text)
         self.assertIn("(1..65536); at least 32,768 recommended", text)
         self.assertIn("no default: --case, --set or --all", text)
-        self.assertIn("--set {full-v1,normal-v1,quick-v3}", text)
+        self.assertIn("--set {deutsch-v1,full-v2,normal-v3,quick-v5}", text)
         self.assertIn("--image", text)
         self.assertIn("--hardware-label TEXT", text)
         self.assertIn("--chat-template-kwargs JSON | --thinking LEVEL", text)
         self.assertIn("unset settings use the server's default", text)
-        self.assertIn("three repetitions unless --temperature 0", text)
+        self.assertIn(
+            "Scores need at least three runs of one setup, at temperature 0 too",
+            " ".join(text.split()),
+        )
         text = self.help()
         self.assertIn(
             "repetitions of one recorded setup (container image and case list"
@@ -244,8 +248,8 @@ class RunRefusals(unittest.TestCase):
             "unknown case": self.argv("--case", "X99"),
             "both selections": self.argv("--all", "--case", "A06"),
             "unknown set": self.argv("--set", "quick-v0"),
-            "set and all": self.argv("--set", "quick-v3", "--all"),
-            "set and case": self.argv("--set", "quick-v3", "--case", "A06"),
+            "set and all": self.argv("--set", "quick-v5", "--all"),
+            "set and case": self.argv("--set", "quick-v5", "--case", "A06"),
             "cap 0": [*base, "--model", "t", "--max-tokens-per-call", "0"],
             "cap 65537": [*base, "--model", "t", "--max-tokens-per-call", "65537"],
             "cap text": [*base, "--model", "t", "--max-tokens-per-call", "x"],
@@ -860,13 +864,13 @@ class Dispatch(unittest.TestCase):
             *("--hardware-label", "Lab 1 (RTX 4090)"),
         ]
         for selection, case_ids in (
-            (["--all"], RUN_CASES),
+            (["--all"], SCORED_RUN_CASES),
             (["--case", "M02", "--case", "A06"], ("M02", "A06")),
             # Exactly the set's list, in its run order.
-            (["--set", "quick-v3"], CASE_SETS["quick-v3"]),
-            (["--set", "normal-v1"], CASE_SETS["normal-v1"]),
+            (["--set", "quick-v5"], case_sets()["quick-v5"]),
+            (["--set", "normal-v3"], case_sets()["normal-v3"]),
             # The full set is the list `--all` plans.
-            (["--set", "full-v1"], RUN_CASES),
+            (["--set", "full-v2"], SCORED_RUN_CASES),
         ):
             with self.subTest(selection=selection):
                 output = self.root / "-".join(["run", *selection]).replace("--", "")
@@ -1057,7 +1061,7 @@ class Dispatch(unittest.TestCase):
         broken = copy_run(source, self.root / "broken")
         (broken / "run.json").unlink()
         pinned = copy_run(source, self.root / "pinned")
-        rebind_plan(pinned, lambda plan: plan.update(design_profile_sha256="0" * 64))
+        rebind_plan(pinned, lambda plan: plan.update(budget_profile="other-v0"))
         (self.root / "loop").symlink_to(self.root / "loop")
         # A refused record names its fixed reason, as `validate` does.
         for argv, message in (
@@ -1108,7 +1112,7 @@ class Dispatch(unittest.TestCase):
         later = "0123456789ab" + "c" * 52
         # Another build's pins may differ too: the build is named either way.
         pinned = copy_run(source, self.root / "pinned")
-        rebind_plan(pinned, lambda plan: plan.update(design_profile_sha256="0" * 64))
+        rebind_plan(pinned, lambda plan: plan.update(budget_profile="other-v0"))
         unnamed = copy_run(source, self.root / "unnamed")
         rebind_plan(unnamed, lambda plan: plan.update(harness_sha256="/private/x"))
         refusal = (
@@ -1149,7 +1153,11 @@ class RecordCommands(unittest.TestCase):
         cls.temp = tempfile.TemporaryDirectory()
         cls.root = Path(cls.temp.name)
         cls.source = cls.root / "run"
-        local_run(Scripted(script("A06", "gold")), cls.source, ("A06",))
+        # The run and two repetitions of it: the three runs a pool needs for
+        # scores.
+        cls.pool = [cls.source, cls.root / "second", cls.root / "third"]
+        for path in cls.pool:
+            local_run(Scripted(script("A06", "gold")), path, ("A06",))
 
     @classmethod
     def tearDownClass(cls):
@@ -1269,21 +1277,36 @@ class RecordCommands(unittest.TestCase):
 
     def test_compare_writes_an_evaluation_offline_and_refuses_otherwise(self):
         output = self.root / "evaluation"
-        argv = ["compare", str(self.source), "--output", str(output)]
+        argv = ["compare", *map(str, self.pool), "--output", str(output)]
         with patch.dict("sys.modules", {"victors_werkbank.integration.harbor": None}):
             code, stdout, _ = self.call([*argv, "--resamples", "100"])
         self.assertEqual(code, 0)
         value = json.loads(stdout)
-        self.assertEqual(set(value), {"evaluation", "pools"}, "no comparison label")
-        self.assertEqual(value["pools"], 1)
+        self.assertEqual(
+            set(value),
+            {"evaluation", "pools", "given_instance_entries"},
+            "no comparison label",
+        )
+        self.assertEqual((value["pools"], value["given_instance_entries"]), (1, 0))
         record = json.loads(Path(value["evaluation"]).read_text())
         self.assertEqual(record["parameters"]["resamples"], 100)
         self.assertEqual(record["pools"][0]["flags"], [])
+        # One run alone is written too, flagged and without scores.
+        alone = self.root / "alone"
+        code, _, stderr = self.call(
+            ["compare", str(self.source), "--output", str(alone)]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("  not evaluated: too_few_repetitions\n", stderr)
+        record = json.loads((alone / "evaluation.json").read_text())
+        self.assertEqual(record["pools"][0]["flags"], ["too_few_repetitions"])
+        shutil.rmtree(alone)
         interrupted = copy_run(self.source, self.root / "unfinished")
         (interrupted / "run.json").unlink()
         for refused in (
             argv,
-            [*argv[:2], str(self.source), "--output", str(self.root / "twice")],
+            ["compare", str(self.source), str(self.source)]
+            + ["--output", str(self.root / "twice")],
             ["compare", str(interrupted), "--output", str(self.root / "partial")],
             ["compare", str(self.source), "--output", str(self.source / "inside")],
         ):
@@ -1295,22 +1318,26 @@ class RecordCommands(unittest.TestCase):
         for name in ("twice", "partial", "run/inside"):
             self.assertFalse((self.root / name).exists())
         for option in ("--resamples", "--bootstrap-seed"):
-            code, _, _ = self.call([*argv[:2], "--output", "x", option, "-1"])
+            code, _, _ = self.call(
+                ["compare", str(self.source), "--output", "x", option, "-1"]
+            )
             self.assertEqual(code, 2)
         shutil.rmtree(output)
 
     def test_compare_prints_solved_and_subgoal_fulfilment_per_pool(self):
-        # A06 solved, M02 with two of its three solution sets right; and one
-        # pass of another sampling, which is not evaluated.
+        # A06 solved, M02 with two of its three solution sets right, in
+        # three passes; and one pass of another sampling, which is not
+        # evaluated.
         near = json.dumps(ALGEBRA_GOLD | {"v": {"roots": ["5"]}})
         replies = script("A06", "gold") + actions_script([], near)
-        cold = self.root / "summary-cold"
-        local_run(Scripted(replies), cold, ("A06", "M02"))
+        cold = [self.root / f"summary-cold-{index}" for index in range(3)]
+        for path in cold:
+            local_run(Scripted(replies), path, ("A06", "M02"))
         hot = self.root / "summary-hot"
         local_run(Served(replies, {"temperature": 0.6}), hot, ("A06", "M02"))
         output = self.root / "summary-evaluation"
         code, stdout, stderr = self.call(
-            ["compare", str(cold), str(hot), "--output", str(output)]
+            ["compare", *map(str, cold), str(hot), "--output", str(output)]
             + ["--resamples", "100"]
         )
         self.assertEqual(code, 0, stderr)
@@ -1330,15 +1357,94 @@ class RecordCommands(unittest.TestCase):
             [
                 "  1.0 of 2 tasks solved on average per pass; passes: 1 to 1",
                 f"  Subgoal fulfilment: {100 * overall:.1f}% overall",
-                "    agentic: 1 of 1 attempts solved (100.0%), subgoal fulfilment"
+                "    agentic: 3 of 3 attempts solved (100.0%), subgoal fulfilment"
                 " 100.0%",
-                "    math: 0 of 1 attempts solved (0.0%), subgoal fulfilment 66.7%",
+                "    math: 0 of 3 attempts solved (0.0%), subgoal fulfilment 66.7%",
             ],
         )
         self.assertIn(f'Pool {other} of 2: "{Served.model}"', lines)
         self.assertIn("  not evaluated: too_few_repetitions", lines)
         self.assertEqual(lines[-1], outcomes.FULFILMENT_NOTE)
         shutil.rmtree(output)
+
+    def test_compare_names_runs_with_a_given_instance_value(self):
+        # A run repeated with the first run's instance value, as `run
+        # --instance` records it: an entry of its own, never a fourth pass.
+        value = json.loads((self.source / "plan.json").read_text())["instance"]
+        self.assertEqual(value["source"], "drawn")
+        given = self.root / "given"
+        local_run(
+            Scripted(script("A06", "gold")), given, ("A06",), instance=value["value"]
+        )
+        output = self.root / "given-evaluation"
+        code, stdout, stderr = self.call(
+            ["compare", *map(str, self.pool), str(given), "--output", str(output)]
+            + ["--resamples", "100"]
+        )
+        self.assertEqual(code, 0, stderr)
+        # One pool, and apart from it one entry that is none: the JSON line
+        # never counts the given runs among the pools.
+        value = json.loads(stdout)
+        self.assertEqual((value["pools"], value["given_instance_entries"]), (1, 1))
+        record = json.loads((output / "evaluation.json").read_text())
+        flags = [pool["flags"] for pool in record["pools"]]
+        self.assertCountEqual(flags, [[], ["given_instance"]])
+        lines = stderr.splitlines()
+        # Named for what it is and numbered apart, never "Pool 2 of 2".
+        self.assertIn(f'Pool 1 of 1: "{Scripted.model}"', lines)
+        self.assertFalse([line for line in lines if " of 2: " in line])
+        at = lines.index(
+            f'Runs with a given instance value, 1 of 1: "{Scripted.model}"'
+        )
+        self.assertEqual(
+            lines[at + 1 : at + 3],
+            [
+                "  not evaluated: given_instance",
+                "  runs with a given instance value repeat an earlier run's data:"
+                " no pool and no score",
+            ],
+        )
+        # The three drawn runs are evaluated as before.
+        self.assertIn(
+            "  1.0 of 1 tasks solved on average per pass; passes: 1 to 1", lines
+        )
+        # The result page of the two entries claims no result for the given
+        # one, and the evaluation validates with its runs.
+        page = self.root / "given-page"
+        code, _, stderr = self.call(["result", str(output), "--output", str(page)])
+        self.assertEqual((code, stderr), (0, ""))
+        document = (page / "index.html").read_text()
+        self.assertEqual(document.count("No core number: these passes were given"), 1)
+        code, stdout, _ = self.call(
+            ["validate", str(output)]
+            + [arg for path in (*self.pool, given) for arg in ("--source", str(path))]
+        )
+        self.assertEqual(
+            json.loads(stdout),
+            {
+                "kind": "evaluation",
+                "valid": True,
+                "complete": True,
+                "pools": 1,
+                "given_instance_entries": 1,
+                "runs": 4,
+            },
+        )
+        # Each heading names its entry's whole setup, which starts with the
+        # served model.
+        setups = {
+            bool(entry["flags"]): result_page._setup(entry) for entry in record["pools"]
+        }
+        self.assertTrue(setups[True].startswith(f"{Scripted.model} · "))
+        self.assertEqual(
+            document.count(
+                f"<h2>Runs with a given instance value, 1 of 1: {setups[True]}</h2>"
+            ),
+            1,
+        )
+        self.assertEqual(document.count(f"<h2>Pool 1 of 1: {setups[False]}</h2>"), 1)
+        shutil.rmtree(output)
+        shutil.rmtree(page)
 
     def test_compare_writes_no_evaluation_validate_would_refuse(self):
         output = self.root / "crossed"
@@ -1352,7 +1458,7 @@ class RecordCommands(unittest.TestCase):
 
         with patch("victors_werkbank.results.partial.pool_credit", crossed):
             code, stdout, stderr = self.call(
-                ["compare", str(self.source), "--output", str(output)]
+                ["compare", *map(str, self.pool), "--output", str(output)]
                 + ["--resamples", "100"]
             )
         self.assertEqual(
@@ -1364,7 +1470,7 @@ class RecordCommands(unittest.TestCase):
     def test_result_is_forwarded_and_writes_the_page_offline(self):
         evaluation = self.root / "result-evaluation"
         code, _, _ = self.call(
-            ["compare", str(self.source), "--output", str(evaluation)]
+            ["compare", *map(str, self.pool), "--output", str(evaluation)]
             + ["--resamples", "100"]
         )
         self.assertEqual(code, 0)
@@ -1537,7 +1643,7 @@ class RecordCommands(unittest.TestCase):
         for flag in (
             "--endpoint",
             "--model",
-            "--mode {quick,normal,full,trial}",
+            "--mode {quick,normal,full,german,trial}",
             "--yes",
             "--output",
             "--max-tokens-per-call",
@@ -1587,7 +1693,7 @@ class RecordCommands(unittest.TestCase):
         )
         output = self.root / "set-evaluation"
         sets = {"solo-a06": ("A06",), "solo-m02": ("M02",)}
-        with patch.dict(CASE_SETS, sets):
+        with patch.dict(case_sets(), sets):
             code, stdout, _ = self.call(
                 [
                     *("compare", str(larger), str(self.source)),
@@ -1653,15 +1759,16 @@ class RecordCommands(unittest.TestCase):
             "agentic": 40,
             "security": 10,
             "math": 1,
-            "coding": 35,
+            "coding": 30,
             "retrieval": 3,
             "reliability": 10,
             "data": 1,
+            "multi-turn": 5,
         }
         own.write_text(
             json.dumps(
                 {
-                    "format": "werkbank-weight-profile-v2",
+                    "format": "werkbank-weight-profile-v3",
                     "id": "coding-agent",
                     "title": "Coding agent",
                     "weights_percent": weights,
@@ -1683,14 +1790,16 @@ class RecordCommands(unittest.TestCase):
         code, stdout, _ = self.call(["validate", str(output)])
         self.assertEqual((code, json.loads(stdout)["kind"]), (3, "evaluation"))
         self.assertEqual(
-            set(json.loads(stdout)), {"kind", "valid", "complete", "pools", "runs"}
+            set(json.loads(stdout)),
+            {"kind", "valid", "complete", "pools", "given_instance_entries", "runs"},
         )
+        self.assertEqual(json.loads(stdout)["given_instance_entries"], 0)
         code, stdout, _ = self.call(
             ["validate", str(output), "--source", str(self.source)]
         )
         self.assertEqual((code, json.loads(stdout)["complete"]), (0, True))
         broken = self.root / "broken.json"
-        broken.write_text(json.dumps({"format": "werkbank-weight-profile-v2"}))
+        broken.write_text(json.dumps({"format": "werkbank-weight-profile-v3"}))
         for profile in (broken, self.root / "absent.json"):
             with self.subTest(profile=profile.name):
                 code, _, stderr = self.call(
@@ -1706,6 +1815,28 @@ class RecordCommands(unittest.TestCase):
                 self.assertEqual(code, 2)
                 self.assertEqual(stderr, "Cannot compare: Invalid weight profile\n")
                 self.assertFalse((self.root / "no").exists())
+        # An evaluation of the previous format is refused, with or without
+        # its runs, and never read: its pools followed another rule.
+        older = self.root / "older"
+        shutil.copytree(output, older)
+        record = json.loads((older / "evaluation.json").read_text())
+        self.assertEqual(record["format"], "werkbank-evaluation-v13")
+        record["format"] = "werkbank-evaluation-v10"
+        (older / "evaluation.json").write_text(json.dumps(record))
+        for sources in ([], ["--source", str(self.source)]):
+            with self.subTest(sources=bool(sources)):
+                code, stdout, stderr = self.call(["validate", str(older), *sources])
+                self.assertEqual(
+                    (code, stdout, stderr),
+                    (
+                        2,
+                        "",
+                        "Invalid: The evaluation has another format than this"
+                        " build's werkbank-evaluation-v13; write it again from its"
+                        " runs with werkbank compare\n",
+                    ),
+                )
+        shutil.rmtree(older)
         (output / "model-card.md").write_text("changed")
         code, _, stderr = self.call(["validate", str(output)])
         self.assertEqual(code, 2)

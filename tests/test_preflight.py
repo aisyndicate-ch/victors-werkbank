@@ -39,10 +39,10 @@ from victors_werkbank.agent.transport import (
 from victors_werkbank.cli import main
 from victors_werkbank.journal import Journal
 from victors_werkbank.registry import (
-    CASE_SETS,
-    CASES,
     EPISODE_COMPLETION_TOKENS,
+    case_sets,
     context_recommendation,
+    scored_cases,
 )
 
 CAP = 4096
@@ -207,16 +207,25 @@ class Contract(unittest.TestCase):
 
         run, _ = options("run")
         own, text = options("preflight")
-        only = ["--output", "--case", "--set", "--all", "--image", "--no-report"]
+        only = [
+            "--output",
+            "--case",
+            "--set",
+            "--all",
+            "--instance",
+            "--image",
+            "--no-report",
+        ]
         self.assertEqual(run - own, set(only))
         self.assertIn(
-            "works without --output, --case, --set, --all, --image and --no-report",
+            "works without --output, --case, --set, --all, --instance, --image and"
+            " --no-report",
             text,
         )
         reference = Path(__file__).resolve().parents[1] / "docs" / "users" / "CLI.md"
         self.assertIn(
-            "works without `--output`, `--case`,\n`--set`, `--all`, `--image` and"
-            " `--no-report`",
+            "works without `--output`, `--case`,\n`--set`, `--all`, `--instance`,"
+            " `--image` and `--no-report`",
             reference.read_text(),
         )
 
@@ -537,7 +546,9 @@ class Probe:
     prompt = preflight.PROMPT
     tools = preflight.TOOLS
     public_test_notice = False
+    language = "en"
     final_answer = False
+    user_messages = ()
 
     def begin_response(self):
         pass
@@ -664,74 +675,90 @@ class Fingerprint(unittest.TestCase):
     def test_each_case_set_and_all_cases_are_named_for_the_reported_context(self):
         result, text, line = self.context_line(65536)
         recommended, short = context_recommendation(
-            tuple(CASES), 65536, max_tokens_per_call=CAP
+            scored_cases(), 65536, max_tokens_per_call=CAP
         )
-        self.assertEqual(len(short), 23)
+        self.assertEqual(len(short), 24)
         self.assertEqual(result.cases_needing_more_context, short)
         self.assertEqual(result.recommended_context, recommended)
         self.assertEqual(
             result.case_sets,
             {
                 name: context_recommendation(case_ids, 65536, max_tokens_per_call=CAP)
-                for name, case_ids in CASE_SETS.items()
+                for name, case_ids in case_sets().items()
             },
         )
-        self.assertEqual(result.case_sets["quick-v3"], (65536, []))
-        normal = result.case_sets["normal-v1"]
-        self.assertEqual((normal[0], len(normal[1])), (131072, 15))
-        # Every registered case is the set full-v1, so no line for all cases
+        self.assertEqual(result.case_sets["quick-v5"], (65536, []))
+        normal = result.case_sets["normal-v3"]
+        self.assertEqual((normal[0], len(normal[1])), (262144, 16))
+        # Every scored case is the set full-v2, so no line for all cases
         # stands beside it.
-        self.assertEqual(result.case_sets["full-v1"], (recommended, short))
+        self.assertEqual(result.case_sets["full-v2"], (recommended, short))
+        # The German module's two largest needs, D04's 67,000 and D05's
+        # 95,000, are above 64K.
+        self.assertEqual(result.case_sets["deutsch-v1"], (131072, ["D04", "D05"]))
         self.assertEqual(
             line,
-            "Context: 65,536 tokens; covers the measured need for quick-v3 (a model"
-            " that carries more reasoning per step can need more); for normal-v1"
-            f" {', '.join(normal[1][:-1])} and {normal[1][-1]} need more"
-            " (recommended: 131,072); for full-v1"
+            "Context: 65,536 tokens; covers the measured need for quick-v5 (a"
+            " model that carries more reasoning per step can need more); for"
+            f" normal-v3 {', '.join(normal[1][:-1])} and {normal[1][-1]} need more"
+            " (recommended: 262,144); for full-v2"
             f" {', '.join(short[:-1])} and {short[-1]} need more (recommended:"
-            " 262,144); a case that needs"
-            " more may end with a capacity rejection",
+            " 262,144); for deutsch-v1 D04 and D05 need more (recommended:"
+            " 131,072); a"
+            " case that needs more may end with a capacity rejection",
         )
         self.assertNotIn("all cases", line)
         # Only the identified server's line.
         self.assertIn("- Context (vLLM): set it with --max-model-len", text)
         self.assertNotIn("(Ollama)", text)
 
-    def test_a_context_covering_normal_names_what_full_needs(self):
+    def test_a_context_covering_german_names_what_normal_and_full_need(self):
         # A covered set is covered for the measured need only: a
         # model that carries more reasoning per step can need more.
         result, text, line = self.context_line(131072)
         self.assertEqual(
             result.case_sets,
             {
-                "quick-v3": (65536, []),
-                "normal-v1": (131072, []),
-                "full-v1": (262144, ["C08"]),
+                "quick-v5": (65536, []),
+                "normal-v3": (262144, ["C10"]),
+                "full-v2": (262144, ["C08", "C10"]),
+                "deutsch-v1": (131072, []),
             },
         )
-        self.assertEqual(result.cases_needing_more_context, ["C08"])
+        self.assertEqual(result.cases_needing_more_context, ["C08", "C10"])
         self.assertEqual(
             line,
             "Context: 131,072 tokens; covers the measured need for"
-            " quick-v3 and normal-v1 (a model that carries more reasoning per step"
-            " can need more); for full-v1 C08 needs more (recommended: 262,144);"
-            " a case that needs more may end with a capacity rejection",
+            " quick-v5 and deutsch-v1 (a model that carries more"
+            " reasoning per step can need more); for normal-v3 C10 needs more"
+            " (recommended: 262,144); for full-v2 C08 and C10 need more"
+            " (recommended: 262,144); a case that needs more may end with a"
+            " capacity rejection",
         )
         self.assertIn("- Context (vLLM): set it with --max-model-len", text)
 
     def test_the_context_lines_follow_the_checked_cap(self):
         # With the largest cap every case needs 32,768 tokens more than its
-        # recorded figure: C10 then needs 156,768, C04 149,768, L02 146,768,
-        # DA06 and R06 133,768 and M03 132,768, above 131,072 like C08 at
-        # either cap. Quick's largest need, R05's, is 62,000 at the recommended
-        # cap and 94,768 at the largest; Normal's, C10's, 124,000 and 156,768.
-        for cap, quick, normal, everything in (
-            (32768, (65536, []), (131072, []), (262144, ["C08"])),
+        # recorded figure: L05 then needs 154,768, C04 149,768, L02 146,768,
+        # DA06 135,768, R06 and A14 133,768, above 131,072 like C08 and C10
+        # at either cap, while M03's 130,768 stays below it. Quick's largest
+        # need, R05's, is 62,000 at the recommended cap and 94,768 at the
+        # largest; Normal's and Full's, C10's, 225,000 and 257,768; German's,
+        # D05's, 95,000 and 127,768.
+        for cap, quick, normal, everything, german in (
+            (
+                32768,
+                (65536, []),
+                (262144, ["C10"]),
+                (262144, ["C08", "C10"]),
+                (131072, []),
+            ),
             (
                 65536,
                 (131072, []),
-                (262144, ["C04", "R06", "L02", "C10"]),
-                (262144, ["C04", "C08", "DA06", "M03", "R06", "L02", "C10"]),
+                (262144, ["C04", "L05", "R06", "L02", "C10"]),
+                (262144, ["C04", "C08", "A14", "L05", "DA06", "R06", "L02", "C10"]),
+                (131072, []),
             ),
         ):
             with self.subTest(cap=cap):
@@ -739,7 +766,12 @@ class Fingerprint(unittest.TestCase):
                 result = preflight.check(endpoint, max_tokens_per_call=cap)
                 self.assertEqual(
                     result.case_sets,
-                    {"quick-v3": quick, "normal-v1": normal, "full-v1": everything},
+                    {
+                        "quick-v5": quick,
+                        "normal-v3": normal,
+                        "full-v2": everything,
+                        "deutsch-v1": german,
+                    },
                 )
                 self.assertEqual(
                     (result.recommended_context, result.cases_needing_more_context),
@@ -753,10 +785,11 @@ class Fingerprint(unittest.TestCase):
         self.assertEqual(
             line,
             "Context: 131,072 tokens; covers the measured need for"
-            " quick-v3 (a model that carries more reasoning per step can need"
-            " more); for normal-v1 C04, R06, L02 and C10 need more (recommended:"
-            " 262,144); for full-v1 C04, C08, DA06, M03, R06, L02 and C10 need"
-            " more (recommended: 262,144); a case that needs more may end with a"
+            " quick-v5 and deutsch-v1 (a model that carries more reasoning per step"
+            " can need more); for normal-v3 C04, L05, R06, L02 and C10 need more"
+            " (recommended: 262,144); for full-v2 C04, C08, A14, L05, DA06, R06,"
+            " L02 and C10 need more (recommended: 262,144); a case that needs"
+            " more may end with a"
             " capacity rejection",
         )
 
@@ -766,16 +799,17 @@ class Fingerprint(unittest.TestCase):
         self.assertEqual(
             result.case_sets,
             {
-                "quick-v3": (65536, []),
-                "normal-v1": (131072, []),
-                "full-v1": (262144, []),
+                "quick-v5": (65536, []),
+                "normal-v3": (262144, []),
+                "full-v2": (262144, []),
+                "deutsch-v1": (131072, []),
             },
         )
         self.assertEqual(
             line,
             "Context: 262,144 tokens; covers the measured need for"
-            " quick-v3, normal-v1 and full-v1 (a model that carries more reasoning"
-            " per step can need more)",
+            " quick-v5, normal-v3, full-v2 and deutsch-v1 (a model that carries more"
+            " reasoning per step can need more)",
         )
         self.assertIn("Server: vLLM 0.11.0", text)
         self.assertIn("Model list: lists the model", text)
@@ -787,16 +821,16 @@ class Fingerprint(unittest.TestCase):
         self.assertEqual(result.cases_needing_more_context, [])
         self.assertEqual(
             line,
-            "Context: not reported (recommended in tokens: 65,536 for quick-v3,"
-            " 131,072 for normal-v1 and 262,144 for full-v1; a serving note's"
-            " context_profile states it)",
+            "Context: not reported (recommended in tokens: 65,536 for quick-v5,"
+            " 262,144 for normal-v3, 262,144 for full-v2 and 131,072 for deutsch-v1;"
+            " a serving note's context_profile states it)",
         )
         self.assertIn("- Context (vLLM): set it with --max-model-len", text)
 
     def test_all_cases_stand_beside_the_sets_when_no_set_holds_them_all(self):
         # A build whose sets do not hold every case still names all cases.
         sets = {"duo": ("A06", "M02")}
-        with patch.dict(preflight.CASE_SETS, sets, clear=True):
+        with patch.dict(preflight.case_sets(), sets, clear=True):
             result, _, line = self.context_line(None)
         self.assertEqual(
             line,
@@ -814,7 +848,7 @@ class Fingerprint(unittest.TestCase):
 
     def test_an_unknown_context_and_server_name_every_server(self):
         _, result, text = checked(
-            [text_body()], listing(owned_by="library", context=None)
+            [text_body()], listing(owned_by="someone", context=None)
         )
         self.assertEqual(preflight.exit_code(result), 3)
         self.assertIn("Server: not identified", text)
@@ -1052,8 +1086,50 @@ class Loopback(unittest.TestCase):
         )
         self.assertNotIn("(vLLM)", stdout)
 
+    def test_ollama_and_lm_studio_get_their_version_context_and_lines(self):
+        loaded = {
+            "models": [
+                {
+                    "key": "served",
+                    "quantization": {"name": "Q4_K_M"},
+                    "loaded_instances": [
+                        {"id": "served", "config": {"context_length": 32768}}
+                    ],
+                }
+            ]
+        }
+        for owned_by, engine, path, line, name in [
+            (
+                "library",
+                ("/api/version", {"version": "0.12.3"}),
+                "/api/version",
+                "Server: Ollama 0.12.3",
+                "Ollama",
+            ),
+            (
+                "organization_owner",
+                ("/api/v1/models", loaded),
+                "/api/v1/models",
+                "Server: LM Studio\n",
+                "LM Studio",
+            ),
+        ]:
+            with self.subTest(server=name):
+                handler = server(
+                    [answer(text_body())], owned_by=owned_by, engine=engine
+                )
+                with serve(handler) as base:
+                    code, stdout, _ = run_cli(*arguments(base))
+                self.assertEqual(code, 3)
+                self.assertEqual(handler.gets, ["/v1/models", path])
+                self.assertIn(line, stdout)
+                self.assertIn(f"- Tool calls ({name}): ", stdout)
+                self.assertNotIn("(vLLM)", stdout)
+        # LM Studio's loaded context is the context the preflight checks.
+        self.assertIn("Context: 32,768 tokens; ", stdout)
+
     def test_an_unidentified_server_gets_every_line(self):
-        handler = server([answer(text_body())], owned_by="library", engine=None)
+        handler = server([answer(text_body())], owned_by="someone", engine=None)
         with serve(handler) as base:
             code, stdout, _ = run_cli(*arguments(base))
         self.assertEqual(code, 3)

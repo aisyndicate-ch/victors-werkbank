@@ -21,7 +21,13 @@ from victors_werkbank import __version__
 from victors_werkbank.agent.episode import harness_digest
 from victors_werkbank.grading.evidence import encode, sha256
 
-from .texts import CONSENT_FORMAT, QUESTIONS, QUESTIONS_FORMAT, SUBMISSION_FORMAT
+from .texts import (
+    CONSENT_FORMAT,
+    LEADERBOARD_CONSENT_FORMAT,
+    QUESTIONS,
+    QUESTIONS_FORMAT,
+    SUBMISSION_FORMAT,
+)
 
 MAX_BODY_BYTES = 67_108_864
 MAX_MEMBERS = 10_000
@@ -74,9 +80,25 @@ def envelope(
     answers: dict[str, str | None],
     raw_data: bool,
     members: list[tuple[str, bytes]],
+    offered: bool = False,
+    publish: bool = False,
+    display_name: str | None = None,
 ) -> bytes:
     """`submission.json` for the other `members`, its fields in their fixed
-    order: two-space indented ASCII JSON with a final newline."""
+    order: two-space indented ASCII JSON with a final newline. `offered`
+    tells whether the leaderboard's consent text was shown and its question
+    asked, which happens only with raw data: the envelope names that text
+    only then, publication needs it, and a display name only comes with
+    publication."""
+    if (
+        (offered and not raw_data)
+        or (publish and not offered)
+        or (display_name is not None and not publish)
+    ):
+        raise ValueError(
+            "The leaderboard is offered only with raw data, publication only"
+            " where it is offered, a display name only with publication"
+        )
     record = {
         "format": SUBMISSION_FORMAT,
         "installation_id": installation_id,
@@ -91,7 +113,12 @@ def envelope(
             "format": QUESTIONS_FORMAT,
             **{field: answers.get(field) for field, _, _ in QUESTIONS},
         },
-        "consent": {"text": CONSENT_FORMAT, "raw_data": raw_data},
+        "consent": {
+            "text": CONSENT_FORMAT,
+            "raw_data": raw_data,
+            "leaderboard": LEADERBOARD_CONSENT_FORMAT if offered else None,
+        },
+        "leaderboard": {"publish": publish, "display_name": display_name},
         "files": [
             {"path": path, "bytes": len(data), "sha256": sha256(data)}
             for path, data in sorted(members)

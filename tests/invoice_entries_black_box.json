@@ -1,0 +1,29 @@
+{
+  "instance": "b4e19c7a05d2f836",
+  "responses": [
+    [
+      ["beleg", {"nummer": "B281"}],
+      ["beleg", {"nummer": "B491"}],
+      ["beleg", {"nummer": "B739"}],
+      ["beleg", {"nummer": "B223"}]
+    ],
+    [
+      ["beleg", {"nummer": "B570"}],
+      ["beleg", {"nummer": "B152"}],
+      ["beleg", {"nummer": "B982"}],
+      ["beleg", {"nummer": "B804"}]
+    ],
+    [
+      ["erfassen", {"beleg": "B281", "summe": 656000, "waehrung": "CHF", "faellig": "2031-03-17"}],
+      ["erfassen", {"beleg": "B491", "summe": 503632, "waehrung": "EUR", "faellig": "2031-02-24"}],
+      ["erfassen", {"beleg": "B739", "summe": 913525, "waehrung": "CHF", "faellig": "2031-03-13"}],
+      ["erfassen", {"beleg": "B223", "summe": -85065, "waehrung": "CHF", "faellig": "2031-03-03"}]
+    ],
+    [
+      ["erfassen", {"beleg": "B570", "summe": 153800, "waehrung": "CHF", "faellig": "2031-04-11"}],
+      ["erfassen", {"beleg": "B152", "summe": 327487, "waehrung": "EUR", "faellig": "2031-03-19"}],
+      ["erfassen", {"beleg": "B982", "summe": 1965600, "waehrung": "EUR", "faellig": "2031-03-21"}],
+      ["erfassen", {"beleg": "B804", "summe": -513000, "waehrung": "EUR", "faellig": "2031-02-18"}]
+    ]
+  ]
+}

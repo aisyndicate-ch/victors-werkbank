@@ -34,7 +34,8 @@ from werkbank_result.writer import check
 from werkbank_start import cli as start_cli
 from werkbank_start import discovery, flow
 from werkbank_start.flow import Boundaries
-from werkbank_submit import texts
+from werkbank_submit import archive, texts
+from werkbank_submit import flow as submit_flow
 from werkbank_ui import cli as ui_cli
 from werkbank_ui import control as controlling
 from werkbank_ui import control_pages, pages
@@ -681,6 +682,50 @@ class Submitting(Interface):
         self.assertEqual(self.receiver.requests[0].method, "POST")
         self.assertEqual(len(self.receiver.stored), 1)
         self.assertIn("Received, receipt", self.page())
+
+    def test_the_leaderboard_and_a_display_name_are_asked_in_the_browser(self):
+        # The series runs Quick, which enters no leaderboard; its questions
+        # come as for the Full set.
+        self.enterContext(mock.patch.object(submit_flow, "ranked", return_value=True))
+        self.begin()
+        by_prompt = {
+            texts.INCLUDE_RAW.strip(): "yes",
+            texts.PUBLISH.strip(): "yes",
+            texts.DISPLAY_NAME.strip(): "Tom 7",
+            texts.SEND_NOW.strip(): "yes",
+        }
+        answers = [
+            *QUICK,
+            ("Send these results to the Werkbank maintainer", "yes"),
+            *((question, "") for _, question, _ in texts.QUESTIONS),
+        ]
+        asked = []
+        for _ in range(40):
+            body = self.pending()
+            question = self.control.session.snapshot().question
+            if question is None:
+                break
+            asked.append(question.prompt.strip())
+            if question.prompt.strip() in by_prompt:
+                self.answer(body, by_prompt[question.prompt.strip()])
+                continue
+            text = self.asked(body)
+            for pattern, value in answers:
+                if re.search(re.escape(pattern) if "?" in pattern else pattern, text):
+                    self.answer(body, value)
+                    break
+            else:
+                self.fail(f"an unexpected question: {text[:300]}")
+        self.assertEqual(self.finished().code, 0)
+        self.assertEqual(
+            [prompt for prompt in asked if prompt in by_prompt], list(by_prompt)
+        )
+        (stored,) = self.receiver.stored.values()
+        envelope = json.loads(archive.read(stored)[0][1])
+        self.assertEqual(
+            envelope["leaderboard"], {"publish": True, "display_name": "Tom 7"}
+        )
+        self.assertIn("Display name: Tom 7", html.unescape(self.page()))
 
     def test_a_no_sends_nothing(self):
         body = self.to_the_summary()

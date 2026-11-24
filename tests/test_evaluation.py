@@ -18,21 +18,24 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from entity_lookup_gold import gold_actions as lookup_actions
 from jsonschema import Draft202012Validator
 from local_run import PINNED, copy_run, local_run
 from scripted import Scripted, Served, reply
 from scripted_http import SERVING_NOTE
-from test_replay_grade import script
+from stateful_gold import credit_actions
+from test_replay_grade import actions_script, script
 
+from victors_werkbank import registry
 from victors_werkbank.agent.transport import EndpointError
 from victors_werkbank.core_profile import design_profile
 from victors_werkbank.domains.catalog import CATALOG, EpisodeContext
 from victors_werkbank.grading.evidence import sha256, tree_sha256
 from victors_werkbank.registry import (
-    CASE_SETS,
     CASES,
     EPISODE_COMPLETION_TOKENS,
     case_set_name,
+    case_sets,
     lifecycle,
 )
 from victors_werkbank.results import comparison, outcomes, partial, report, tables
@@ -224,7 +227,7 @@ class NoProgressStops(unittest.TestCase):
 
 class OutcomeClasses(unittest.TestCase):
     def test_every_terminal_outcome_this_build_writes_has_one_class(self):
-        # The inventory of harbor-run-v4: a new reason must be classified here.
+        # The inventory of harbor-run-v6: a new reason must be classified here.
         expected = {
             ("passed", "verified"),
             *(
@@ -579,22 +582,22 @@ class Scores(unittest.TestCase):
             profile, ["A06", "A09", "M02"], tries, resamples=100, seed=0
         )[0]
         agentic, math = scores["categories"]["agentic"], scores["categories"]["math"]
-        # One of 10 planned agentic cases passed; eight were never run.
-        self.assertAlmostEqual(agentic["lower"], 1 / 10)
-        self.assertAlmostEqual(agentic["upper"], 9 / 10)
-        self.assertAlmostEqual(agentic["coverage"], 2 / 10)
+        # One of 12 planned agentic cases passed; ten were never run.
+        self.assertAlmostEqual(agentic["lower"], 1 / 12)
+        self.assertAlmostEqual(agentic["upper"], 11 / 12)
+        self.assertAlmostEqual(agentic["coverage"], 2 / 12)
         self.assertEqual((agentic["rate"], agentic["score"]), (0.5, None))
-        self.assertAlmostEqual(math["lower"], 1 / 4)
+        self.assertAlmostEqual(math["lower"], 1 / 5)
         self.assertAlmostEqual(math["upper"], 1)
         # A category without measured cases is all bounds.
         security = scores["categories"]["security"]
         self.assertEqual((security["lower"], security["upper"]), (0, 1))
         self.assertIsNone(security["rate"])
-        # METHODOLOGY.md, Scoring: an agentic case is worth 30/10, a math case 5/4.
+        # METHODOLOGY.md, Scoring: an agentic case is worth 30/12, a math case 5/5.
         points = scores["overall"]["points"]
-        self.assertAlmostEqual(points["lower"], 30 / 10 + 5 / 4)
+        self.assertAlmostEqual(points["lower"], 30 / 12 + 5 / 5)
         self.assertIsNone(points["score"])
-        self.assertAlmostEqual(scores["overall"]["coverage"], 3 / 40)
+        self.assertAlmostEqual(scores["overall"]["coverage"], 3 / 57)
 
     def test_unmeasured_repetitions_widen_the_bounds_and_censoring_counts_zero(self):
         profile = design_profile()
@@ -610,13 +613,13 @@ class Scores(unittest.TestCase):
         }
         scores = ev._scored(profile, ["A06", "M02"], tries, resamples=100, seed=0)[0]
         agentic, math = scores["categories"]["agentic"], scores["categories"]["math"]
-        self.assertAlmostEqual(agentic["lower"], 0.5 / 10)
-        self.assertAlmostEqual(agentic["upper"], 10 / 10)
-        self.assertAlmostEqual(agentic["coverage"], 0.5 / 10)
+        self.assertAlmostEqual(agentic["lower"], 0.5 / 12)
+        self.assertAlmostEqual(agentic["upper"], 12 / 12)
+        self.assertAlmostEqual(agentic["coverage"], 0.5 / 12)
         self.assertEqual(agentic["rate"], 1.0)
         # A censored attempt is not solved in the score, nor in the rate that
         # ranks pools: both are budget-score values.
-        self.assertAlmostEqual(math["lower"], 0.5 / 4)
+        self.assertAlmostEqual(math["lower"], 0.5 / 5)
         self.assertEqual(math["rate"], 0.5)
         self.assertEqual((math["passed_attempts"], math["measured_attempts"]), (1, 2))
 
@@ -661,14 +664,14 @@ class Scores(unittest.TestCase):
     def test_a_scored_case_set_has_a_score_over_its_own_cases(self):
         profile = design_profile()
         weights = profile["weights_percent"]
-        normal, full = list(CASE_SETS["normal-v1"]), list(CASE_SETS["full-v1"])
+        normal, full = list(case_sets()["normal-v3"]), list(case_sets()["full-v2"])
         own = {
             category: sum(CASES[c].category == category for c in normal)
             for category in weights
         }
         tries, solved = self.halves(normal)
         scores = ev._scored(profile, normal, tries, resamples=200, seed=0)[0]
-        self.assertEqual(scores["case_set"], "normal-v1")
+        self.assertEqual(scores["case_set"], "normal-v3")
         for category, item in scores["categories"].items():
             with self.subTest(category=category):
                 # The set's own cases are the planned ones: nothing is missed.
@@ -692,7 +695,7 @@ class Scores(unittest.TestCase):
         # Every registered case is the profile's own count: Full is as before.
         tries, solved = self.halves(full)
         scores = ev._scored(profile, full, tries, resamples=200, seed=0)[0]
-        self.assertEqual(scores["case_set"], "full-v1")
+        self.assertEqual(scores["case_set"], "full-v2")
         self.assertAlmostEqual(
             scores["overall"]["points"]["score"],
             sum(weights[k] * solved[k] / profile["planned_counts"][k] for k in weights),
@@ -700,7 +703,7 @@ class Scores(unittest.TestCase):
 
     def test_quick_and_other_lists_keep_bounds_and_no_score(self):
         profile = design_profile()
-        quick, normal = list(CASE_SETS["quick-v3"]), list(CASE_SETS["normal-v1"])
+        quick, normal = list(case_sets()["quick-v5"]), list(case_sets()["normal-v3"])
         for case_ids in (quick, normal[:-1], [*quick, "C08"]):
             with self.subTest(cases=len(case_ids)):
                 tries = {case_id: [attempt(case_id)] for case_id in case_ids}
@@ -719,7 +722,7 @@ class Scores(unittest.TestCase):
     def test_partial_credit_and_pairs_follow_the_scored_set(self):
         profile = design_profile()
         weights = profile["weights_percent"]
-        normal = list(CASE_SETS["normal-v1"])
+        normal = list(case_sets()["normal-v3"])
         own = {
             category: sum(CASES[c].category == category for c in normal)
             for category in weights
@@ -761,8 +764,8 @@ class Scores(unittest.TestCase):
                 "scores": scores,
             }
 
-        normal, full = list(CASE_SETS["normal-v1"]), list(CASE_SETS["full-v1"])
-        quick = list(CASE_SETS["quick-v3"])
+        normal, full = list(case_sets()["normal-v3"]), list(case_sets()["full-v2"])
+        quick = list(case_sets()["quick-v5"])
         entries = [
             entry("normal-a", normal),
             entry("normal-b", normal, normal[:4]),
@@ -1054,8 +1057,8 @@ def synthetic(case_ids, lost):
 class CaseSetRecords(unittest.TestCase):
     """Whole evaluation records of pools on the case sets, through the checker
     and every rendering. Coding and data are code cases, which need Docker, so
-    two recorded host runs give the pools and synthetic attempts stand in for
-    the cases of a set."""
+    recorded host runs give two pools of three runs each and synthetic
+    attempts stand in for the cases of a set."""
 
     @classmethod
     def setUpClass(cls):
@@ -1063,16 +1066,18 @@ class CaseSetRecords(unittest.TestCase):
         root = Path(cls.temp.name)
         paths = []
         for served in (Served, Other):
-            path = root / served.model
-            local_run(
-                served(
-                    script("A06", "gold") + script("M02", "gold"), {"temperature": 0.0}
-                ),
-                path,
-                ("A06", "M02"),
-                serving_note=SERVING_NOTE,
-            )
-            paths.append(path)
+            for seed in range(3):
+                path = root / f"{served.model}-{seed}"
+                local_run(
+                    served(
+                        script("A06", "gold") + script("M02", "gold"),
+                        {"temperature": 0.0, "seed": seed},
+                    ),
+                    path,
+                    ("A06", "M02"),
+                    serving_note=SERVING_NOTE,
+                )
+                paths.append(path)
         cls.views = ev.read_inputs(paths)
 
     @classmethod
@@ -1092,9 +1097,9 @@ class CaseSetRecords(unittest.TestCase):
         return list(csv.DictReader(io.StringIO(data)))
 
     def test_a_scored_set_is_named_wherever_its_score_stands(self):
-        for name, count in (("normal-v1", 31), ("full-v1", 40)):
+        for name, count in (("normal-v3", 46), ("full-v2", 57)):
             with self.subTest(case_set=name):
-                record = self.record(CASE_SETS[name])
+                record = self.record(case_sets()[name])
                 self.assertEqual(len(record["pools"]), 2)
                 for entry in record["pools"]:
                     self.assertEqual(entry["case_set"], name)
@@ -1114,8 +1119,9 @@ class CaseSetRecords(unittest.TestCase):
                 self.assertEqual(ranking["case_ids"], record["pools"][0]["case_ids"])
                 rendered = tables.outputs(record)
                 label = f"| overall (points, {name}) |"
-                # The score table and the partial-credit table of both pools.
-                self.assertEqual(rendered[ev.MARKDOWN].decode().count(label), 4)
+                # The score table and the partial-credit table of both pools,
+                # and their paired difference, on the group's case list.
+                self.assertEqual(rendered[ev.MARKDOWN].decode().count(label), 5)
                 # The pair's difference in points names the set too. A pair
                 # records the cases in the order the runs planned them, here
                 # the two recorded ones, so it is rendered with the pool's.
@@ -1123,7 +1129,7 @@ class CaseSetRecords(unittest.TestCase):
                 (pair,) = paired["comparisons"]
                 pair["case_ids"] = list(record["pools"][0]["case_ids"])
                 markdown, _ = ev.render(paired)
-                self.assertEqual(markdown.count(label), 5)
+                self.assertEqual(markdown.count(label), 6)
                 self.assertNotIn("| overall (points) |", markdown)
                 card = rendered[tables.MODEL_CARD].decode()
                 self.assertEqual(card.count(label), 2)
@@ -1135,10 +1141,53 @@ class CaseSetRecords(unittest.TestCase):
                     )
                     self.assertNotEqual(row["score_points"], "")
 
+    def test_a_quick_list_with_two_cases_per_category_is_scored_once_named(self):
+        # Quick gets a score once its list holds at least two cases of every
+        # weighted category and the shipped data name it scored; no code
+        # changes. The Quick list with S04 in place of S07, named scored,
+        # stands in for such a list.
+        sets, scored = registry._case_set_data()
+        order = list(CASES)
+        single = tuple(c for c in sets["quick-v5"] if c != "S07")
+        quick = tuple(sorted((*single, "S04"), key=order.index))
+        found = {**sets, "quick-v9": quick}, (*scored, "quick-v9")
+        registry._check_case_sets(*found)
+        own = dict.fromkeys(design_profile()["weights_percent"], 0)
+        for case_id in quick:
+            own[CASES[case_id].category] += 1
+        with mock.patch.object(registry, "_case_set_data", lambda: found):
+            record = self.record(quick)
+        for entry in record["pools"]:
+            self.assertEqual(entry["case_set"], "quick-v9")
+            scores = entry["scores"]
+            self.assertEqual(scores["case_set"], "quick-v9")
+            self.assertEqual(
+                {k: v["planned"] for k, v in scores["categories"].items()}, own
+            )
+            self.assertIsNotNone(scores["overall"]["points"]["score"])
+            self.assertIsNotNone(scores["overall"]["points"]["interval"])
+            self.assertIsNotNone(entry["partial_credit"]["overall"]["score"])
+        (ranking,) = [
+            item for item in record["separability"] if item["category"] == "overall"
+        ]
+        self.assertEqual(len(ranking["ranking"]), 2)
+        self.assertIn(
+            "| overall (points, quick-v9) |",
+            tables.outputs(record)[ev.MARKDOWN].decode(),
+        )
+        # A Quick list with one security case is no scored set.
+        self.assertEqual(
+            [c for c in single if CASES[c].category == "security"], ["S06"]
+        )
+        with self.assertRaisesRegex(ValueError, "Invalid scored case set"):
+            registry._check_case_sets(
+                {**sets, "quick-v8": single}, (*scored, "quick-v8")
+            )
+
     def test_the_checker_holds_a_scored_pool_to_its_sets_own_counts(self):
         # A checker that held a Normal pool to the profile's 40 cases would
         # refuse every Normal evaluation.
-        record = self.record(CASE_SETS["normal-v1"])
+        record = self.record(case_sets()["normal-v3"])
         with (
             mock.patch.object(
                 check, "planned_counts", lambda profile, _: profile["planned_counts"]
@@ -1147,9 +1196,9 @@ class CaseSetRecords(unittest.TestCase):
         ):
             check.check_consistency(record)
         # And one that took any pool for scored would refuse Quick.
-        quick = self.record(CASE_SETS["quick-v3"])
+        quick = self.record(case_sets()["quick-v5"])
         with (
-            mock.patch.object(check, "scored_set", lambda _: "normal-v1"),
+            mock.patch.object(check, "scored_set", lambda _: "normal-v3"),
             self.assertRaisesRegex(RecordError, "inconsistent"),
         ):
             check.check_consistency(quick)
@@ -1157,8 +1206,8 @@ class CaseSetRecords(unittest.TestCase):
     def test_quick_and_an_own_selection_have_bounds_and_name_no_scored_set(self):
         profile = design_profile()
         for case_ids, name in (
-            (CASE_SETS["quick-v3"], "quick-v3"),
-            (CASE_SETS["normal-v1"][:-1], None),
+            (case_sets()["quick-v5"], "quick-v5"),
+            (case_sets()["normal-v3"][:-1], None),
         ):
             with self.subTest(case_set=name):
                 record = self.record(case_ids)
@@ -1219,15 +1268,25 @@ class RecordedRuns(unittest.TestCase):
                 [("gold", "gold"), ("gold", "fail"), ("malformed", "gold")]
             )
         ]
-        cls.other = record(
-            "cap",
-            script("A06", "gold") + [reply(finish="length", usage=32768)],
-            max_tokens_per_call=32768,
-            **note,
-        )
-        cls.plain = record(
-            "plain", script("A06", "gold") + script("M02", "gold"), Scripted
-        )
+        # Three runs each, as a pool needs for scores; the first stands for
+        # its pool.
+        cls.others = [
+            record(
+                f"cap{index}",
+                script("A06", "gold") + [reply(finish="length", usage=32768)],
+                max_tokens_per_call=32768,
+                **note,
+            )
+            for index in range(3)
+        ]
+        cls.other = cls.others[0]
+        cls.plains = [
+            record(
+                f"plain{index}", script("A06", "gold") + script("M02", "gold"), Scripted
+            )
+            for index in range(3)
+        ]
+        cls.plain = cls.plains[0]
         cls.hot = record(
             "hot",
             script("A06", "gold") + script("M02", "gold"),
@@ -1250,13 +1309,17 @@ class RecordedRuns(unittest.TestCase):
             cases=("A06",),
             **note,
         )
-        cls.imaged = record(
-            "imaged",
-            script("A06", "gold") + script("M02", "gold"),
-            sampling={"temperature": 0, "seed": 5},
-            image=OTHER_IMAGE,
-            **note,
-        )
+        cls.imageds = [
+            record(
+                f"imaged{seed}",
+                script("A06", "gold") + script("M02", "gold"),
+                sampling={"temperature": 0, "seed": seed},
+                image=OTHER_IMAGE,
+                **note,
+            )
+            for seed in (5, 6, 7)
+        ]
+        cls.imaged = cls.imageds[0]
         # The repetitions' setup with chat template variables sent.
         cls.thinking = [
             record(
@@ -1285,7 +1348,7 @@ class RecordedRuns(unittest.TestCase):
         return entry
 
     def test_seeded_repetitions_pool_and_other_configurations_never_do(self):
-        record = self.evaluate(*self.reps, self.other, self.plain)
+        record = self.evaluate(*self.reps, *self.others, *self.plains)
         self.assertEqual(len(record["pools"]), 3)
         reps = self.pool(record, self.reps[0])
         self.assertEqual(reps["repetitions"], 3)
@@ -1443,8 +1506,8 @@ class RecordedRuns(unittest.TestCase):
         self.assertEqual((m02["case_id"], m02["passed"]), ("M02", 2))
         self.assertTrue(a06["nondeterministic"])
         agentic = reps["scores"]["categories"]["agentic"]
-        self.assertAlmostEqual(agentic["lower"], (2 / 3) / 10)
-        self.assertAlmostEqual(agentic["upper"], (2 / 3 + 9) / 10)
+        self.assertAlmostEqual(agentic["lower"], (2 / 3) / 12)
+        self.assertAlmostEqual(agentic["upper"], (2 / 3 + 11) / 12)
         failures = reps["failures"]["overall"]["classes"]
         self.assertEqual((failures["solved"], failures["wrong_result"]), (4, 2))
         # The malformed call never ended its episode; only the journal shows it.
@@ -1516,22 +1579,26 @@ class RecordedRuns(unittest.TestCase):
         self.assertIn("| agentic | 1 | 1 | ", markdown)
 
     def test_an_output_limit_attempt_marks_the_budget_as_possibly_binding(self):
-        other = self.pool(self.evaluate(self.other), self.other)
+        other = self.pool(self.evaluate(*self.others), self.other)
         curve = other["budget_curve"]["categories"]["math"]
-        self.assertEqual(curve["output_limit_reasons"], {"response_token_budget": 1})
+        self.assertEqual(curve["output_limit_reasons"], {"response_token_budget": 3})
         self.assertTrue(curve["possibly_binding"])
         self.assertFalse(
             other["budget_curve"]["categories"]["agentic"]["possibly_binding"]
         )
         self.assertEqual(
-            other["failures"]["categories"]["math"]["classes"]["truncated"], 1
+            other["failures"]["categories"]["math"]["classes"]["truncated"], 3
         )
-        self.assertEqual(other["cases"][1]["censored"], 1)
+        self.assertEqual(other["cases"][1]["censored"], 3)
 
     def test_an_invalid_result_or_too_few_repetitions_leave_a_pool_unevaluated(self):
         record = self.evaluate(self.invalid, self.hot)
         invalid = self.pool(record, self.invalid)
-        self.assertEqual(invalid["flags"], ["invalid_result", "below_recommendation"])
+        # One run with an invalid result is also fewer than three.
+        self.assertEqual(
+            invalid["flags"],
+            ["invalid_result", "too_few_repetitions", "below_recommendation"],
+        )
         self.assertFalse(invalid["evaluable"])
         for key in ("scores", "efficiency", "budget_curve", "partial_credit"):
             self.assertIsNone(invalid[key])
@@ -1559,7 +1626,7 @@ class RecordedRuns(unittest.TestCase):
                 self.evaluate(self.reps[0], self.partial)
 
     def test_a_case_set_evaluates_larger_runs_on_exactly_its_cases(self):
-        with mock.patch.dict(CASE_SETS, {"solo-a06": ("A06",)}):
+        with mock.patch.dict(case_sets(), {"solo-a06": ("A06",)}):
             # Without a set: one pool per case list, each named where its
             # list is exactly a set's.
             record = self.evaluate(*self.reps, self.partial)
@@ -1607,7 +1674,7 @@ class RecordedRuns(unittest.TestCase):
                 check.check_consistency(changed)
 
     def test_a_run_without_a_case_of_the_set_is_refused(self):
-        with mock.patch.dict(CASE_SETS, {"duo": ("A06", "M02")}):
+        with mock.patch.dict(case_sets(), {"duo": ("A06", "M02")}):
             with self.assertRaisesRegex(
                 RecordError, "^A run does not plan every case of case set duo$"
             ):
@@ -1622,7 +1689,7 @@ class RecordedRuns(unittest.TestCase):
 
     def test_an_invalid_result_outside_the_set_leaves_the_pool_unevaluated(self):
         # A06 ended invalid and stopped the run; M02 was not run.
-        with mock.patch.dict(CASE_SETS, {"solo-m02": ("M02",)}):
+        with mock.patch.dict(case_sets(), {"solo-m02": ("M02",)}):
             record = self.evaluate(self.invalid, case_set="solo-m02")
         (pool,) = record["pools"]
         self.assertEqual(pool["case_ids"], ["M02"])
@@ -1677,23 +1744,23 @@ class RecordedRuns(unittest.TestCase):
     def test_the_run_report_names_the_case_set_of_its_cases(self):
         view = read_run(self.reps[0])
         self.assertIn("- Case set: own selection (2 cases)\n", render(view)[0])
-        with mock.patch.dict(CASE_SETS, {"duo": ("A06", "M02")}):
+        with mock.patch.dict(case_sets(), {"duo": ("A06", "M02")}):
             self.assertIn("- Case set: duo\n", render(view)[0])
-        # Every registered case is a case set of its own, the full one.
-        everything = list(CASES)
+        # Every scored case is a case set of its own, the full one.
+        everything = list(case_sets()["full-v2"])
         self.assertEqual(
             report.case_set_text(case_set_name(everything), everything),
-            "full-v1",
+            "full-v2",
         )
-        self.assertEqual(report.case_set_text("quick-v3", ["A06"]), "quick-v3")
+        self.assertEqual(report.case_set_text("quick-v5", ["A06"]), "quick-v5")
 
     def test_another_container_image_is_another_pool(self):
         # The code cases' submissions and the graders run in the pinned
         # image: the same setup in another image never pools or pairs.
-        record = self.evaluate(*self.reps, self.imaged)
+        record = self.evaluate(*self.reps, *self.imageds)
         reps, imaged = (self.pool(record, p) for p in (self.reps[0], self.imaged))
         self.assertNotEqual(reps["key"], imaged["key"])
-        self.assertEqual((reps["repetitions"], imaged["repetitions"]), (3, 1))
+        self.assertEqual((reps["repetitions"], imaged["repetitions"]), (3, 3))
         self.assertEqual((reps["image"], imaged["image"]), (DIGEST, OTHER_DIGEST))
         self.assertTrue(reps["evaluable"] and imaged["evaluable"])
         self.assertEqual(record["comparisons"], [])
@@ -1799,6 +1866,45 @@ class SetupPools(unittest.TestCase):
         self.assertEqual({i["pool"] for i in record["inputs"]}, {pool["key"]})
         Draft202012Validator(SCHEMA).validate(written(record))
 
+    def test_every_pool_needs_three_runs_at_temperature_0_too(self):
+        for count in (1, 2):
+            with self.subTest(runs=count):
+                record = self.evaluate(*self.served[:count])
+                (pool,) = record["pools"]
+                self.assertEqual(pool["configuration"]["sampling"], {"temperature": 0})
+                self.assertEqual(
+                    (pool["flags"], pool["evaluable"]),
+                    (["too_few_repetitions"], False),
+                )
+                for key in ("scores", "efficiency", "budget_curve", "partial_credit"):
+                    self.assertIsNone(pool[key])
+                # What happened is still shown.
+                self.assertEqual(
+                    pool["failures"]["overall"]["classes"]["solved"], count
+                )
+                self.assertIn(
+                    "- Not evaluated: a pool needs at least 3 runs for scores,"
+                    f" whatever its sampling; this one has {count}",
+                    ev.render(record)[0],
+                )
+                Draft202012Validator(SCHEMA).validate(written(record))
+        record = self.evaluate(*self.served)
+        (pool,) = record["pools"]
+        self.assertEqual((pool["flags"], pool["evaluable"]), ([], True))
+        self.assertEqual(record["parameters"]["min_repetitions"], 3)
+        self.assertNotIn("min_repetitions_above_temperature_zero", record["parameters"])
+        # The record's flag follows the number of runs alone: an evaluated
+        # pool of two runs, or a flagged pool of three, is inconsistent.
+        two = written(self.evaluate(*self.served[:2]))
+        check.check_consistency(two)
+        two["pools"][0]["flags"] = []
+        with self.assertRaisesRegex(RecordError, "inconsistent"):
+            check.check_consistency(two)
+        three = written(record)
+        three["pools"][0]["flags"] = ["too_few_repetitions"]
+        with self.assertRaisesRegex(RecordError, "inconsistent"):
+            check.check_consistency(three)
+
     def test_without_a_models_listing_the_model_name_tells_setups_apart(self):
         record = self.evaluate(*self.unlisted, self.renamed, *self.served)
         self.assertEqual(len(record["pools"]), 3)
@@ -1894,6 +2000,350 @@ class SetupPools(unittest.TestCase):
         Draft202012Validator(SCHEMA).validate(record)
 
 
+class InstanceValues(unittest.TestCase):
+    """Runs of one setup: three with drawn instance values, two given one
+    value to repeat a run's data and one given another."""
+
+    DRAWN = ("1111111111111111", "2222222222222222", "3333333333333333")
+    GIVEN = "2222222222222222"
+    OTHER = "abcdefabcdef0123"
+    # Two families of one category, so the pool has an interval and a rank.
+    CASES = ("A06", "A15")
+
+    @classmethod
+    def setUpClass(cls):
+        cls.temp = tempfile.TemporaryDirectory()
+        cls.root = Path(cls.temp.name)
+
+        def record(name, seed, instance=None, drawn=None):
+            path = cls.root / name
+            local_run(
+                Served(
+                    actions_script(credit_actions(instance or drawn))
+                    + actions_script(lookup_actions(instance or drawn)),
+                    {"temperature": 0, "seed": seed},
+                ),
+                path,
+                cls.CASES,
+                serving_note=SERVING_NOTE,
+                instance=instance,
+                drawn=drawn,
+            )
+            return path
+
+        cls.drawn = [
+            record(f"drawn{seed}", seed, drawn=value)
+            for seed, value in zip((1, 2, 3), cls.DRAWN, strict=True)
+        ]
+        # The value of the second drawn run, given: a reproduction of it.
+        cls.given = [record(f"given{seed}", seed, cls.GIVEN) for seed in (4, 5)]
+        cls.other = record("other", 6, cls.OTHER)
+        cls.record = ev.evaluate(
+            ev.read_inputs([*cls.drawn, *cls.given, cls.other]), resamples=200
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.temp.cleanup()
+
+    def entry(self, path):
+        run_id = read_run(path).plan["run_id"]
+        (entry,) = [p for p in self.record["pools"] if run_id in p["runs"]]
+        return entry
+
+    def test_the_plans_record_the_source_of_their_values(self):
+        sources = [
+            read_run(path).plan["instance"]
+            for path in (self.drawn[0], self.given[0], self.other)
+        ]
+        self.assertEqual(
+            sources,
+            [
+                {"value": self.DRAWN[0], "source": "drawn"},
+                {"value": self.GIVEN, "source": "given"},
+                {"value": self.OTHER, "source": "given"},
+            ],
+        )
+
+    def test_drawn_runs_of_one_setup_pool_whatever_values_they_drew(self):
+        pool = self.entry(self.drawn[0])
+        self.assertEqual(pool["repetitions"], 3)
+        # One value per run, in the order of the runs, beside the seeds.
+        by_run = {
+            read_run(path).plan["run_id"]: (seed, value)
+            for path, seed, value in zip(self.drawn, (1, 2, 3), self.DRAWN, strict=True)
+        }
+        self.assertEqual(
+            list(zip(pool["seeds"], pool["instances"], strict=True)),
+            [by_run[run_id] for run_id in pool["runs"]],
+        )
+        self.assertEqual((pool["flags"], pool["evaluable"]), ([], True))
+        self.assertEqual(pool["scores"]["categories"]["agentic"]["passed_attempts"], 6)
+        # The key of a pool of drawn runs holds no instance value.
+        identity = read_run(self.drawn[0]).plan["serving"]["identity"]
+        self.assertEqual(
+            pool["key"],
+            digest(
+                {
+                    "setup": identity["sha256"],
+                    "image": DIGEST,
+                    "case_ids": ["A06", "A15"],
+                }
+            ),
+        )
+
+    def test_a_given_value_never_joins_the_drawn_runs_and_has_no_scores(self):
+        self.assertEqual(len(self.record["pools"]), 3)
+        pool, given, other = (
+            self.entry(path) for path in (self.drawn[0], self.given[0], self.other)
+        )
+        self.assertEqual(len({pool["key"], given["key"], other["key"]}), 3)
+        # Repetitions of one reproduction group together, by setup and value.
+        self.assertEqual(given, self.entry(self.given[1]))
+        self.assertEqual(given["instances"], [self.GIVEN, self.GIVEN])
+        self.assertEqual(sorted(given["seeds"]), [4, 5])
+        self.assertEqual(other["instances"], [self.OTHER])
+        identity = read_run(self.given[0]).plan["serving"]["identity"]
+        self.assertEqual(
+            given["key"],
+            digest(
+                {
+                    "setup": identity["sha256"],
+                    "image": DIGEST,
+                    "case_ids": ["A06", "A15"],
+                    "instance": self.GIVEN,
+                }
+            ),
+        )
+        for entry in (given, other):
+            # Never asked for repetitions: no number of them makes a pool.
+            self.assertEqual(entry["flags"], ["given_instance"])
+            self.assertFalse(entry["evaluable"])
+            for key in (
+                "scores",
+                "rescores",
+                "efficiency",
+                "budget_curve",
+                "partial_credit",
+            ):
+                self.assertIsNone(entry[key])
+            # What happened is still shown.
+            runs = entry["repetitions"]
+            self.assertEqual(
+                entry["failures"]["overall"]["classes"]["solved"], 2 * runs
+            )
+            self.assertEqual(entry["protocol_errors"]["overall"]["episodes"], 2 * runs)
+            for case in entry["cases"]:
+                self.assertEqual(
+                    [o["status"] for o in case["outcomes"]], ["passed"] * runs
+                )
+                self.assertIsNone(case["efficiency"])
+
+    def test_given_runs_have_no_ranking_pair_or_pareto_point(self):
+        pool, given, other = (
+            self.entry(path) for path in (self.drawn[0], self.given[0], self.other)
+        )
+        outside = {given["key"], other["key"]}
+        self.assertTrue(self.record["separability"])
+        for item in self.record["separability"]:
+            self.assertEqual({rank["pool"] for rank in item["ranking"]}, {pool["key"]})
+            self.assertEqual(set(item["not_ranked"]), outside)
+            self.assertEqual(item["not_separable"], [])
+        self.assertEqual(self.record["comparisons"], [])
+        self.assertTrue(self.record["pareto"])
+        for item in self.record["pareto"]:
+            self.assertEqual({point["pool"] for point in item["placed"]}, {pool["key"]})
+            self.assertEqual(
+                {(row["pool"], row["reason"]) for row in item["not_placed"]},
+                {(key, "not_evaluable") for key in outside},
+            )
+        # Three given runs of one value are no pool either: the same runs
+        # with a drawn source would be one.
+        views = ev.read_inputs([*self.given, self.other])
+        for view in views:
+            view.plan["instance"] = {"value": self.GIVEN, "source": "given"}
+        (entry,) = ev.evaluate(views, resamples=200)["pools"]
+        self.assertEqual(entry["repetitions"], 3)
+        self.assertEqual(
+            (entry["flags"], entry["evaluable"]), (["given_instance"], False)
+        )
+        for view in views:
+            view.plan["instance"] = {"value": self.GIVEN, "source": "drawn"}
+        (entry,) = ev.evaluate(views, resamples=200)["pools"]
+        self.assertEqual((entry["flags"], entry["evaluable"]), ([], True))
+
+    def test_the_evaluation_names_the_values_and_the_given_entries(self):
+        markdown, _ = ev.render(self.record)
+        pool, given = self.entry(self.drawn[0]), self.entry(self.given[0])
+        self.assertIn(
+            "Offline over 6 validated runs in 1 pools and 2 entries of runs with a"
+            " given instance value;",
+            markdown,
+        )
+        self.assertIn(f"## Pool `{pool['key']}`", markdown)
+        self.assertIn(
+            "- Instance values (drawn per run): "
+            + ", ".join(f"`{value}`" for value in pool["instances"]),
+            markdown,
+        )
+        self.assertIn(f"## Runs with a given instance value `{given['key']}`", markdown)
+        self.assertNotIn(f"## Pool `{given['key']}`", markdown)
+        self.assertIn(
+            f"- Instance values (given): `{self.GIVEN}`, `{self.GIVEN}`", markdown
+        )
+        self.assertEqual(markdown.count(f"- {ev.GIVEN_NOTE}"), 2)
+        self.assertIn("(`werkbank run --instance`)", ev.GIVEN_NOTE)
+        section = markdown.split(f"`{given['key']}`\n", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("- Flags: given_instance", section)
+        self.assertNotIn("### Category scores", section)
+        self.assertIn("### Failures", section)
+        self.assertIn("### Cases", section)
+        # Without a given entry the opening counts pools alone.
+        alone, _ = ev.render(ev.evaluate(ev.read_inputs(self.drawn), resamples=200))
+        self.assertIn("Offline over 3 validated runs in 1 pools;", alone)
+
+    def test_pools_and_given_entries_are_numbered_and_counted_apart(self):
+        self.assertEqual(ev.entry_counts(self.record), (1, 2))
+        labels = dict(
+            zip(
+                [entry["key"] for entry in self.record["pools"]],
+                ev.entry_labels(self.record),
+                strict=True,
+            )
+        )
+        pool, given, other = (
+            self.entry(path) for path in (self.drawn[0], self.given[0], self.other)
+        )
+        self.assertEqual(labels[pool["key"]], "Pool 1 of 1")
+        # In the record's order, among themselves; never "Pool 2 of 3".
+        self.assertEqual(
+            sorted(labels[entry["key"]] for entry in (given, other)),
+            [
+                "Runs with a given instance value, 1 of 2",
+                "Runs with a given instance value, 2 of 2",
+            ],
+        )
+        self.assertEqual(
+            [given for given, _, _ in ev.entry_numbers(self.record)],
+            [ev.is_given(entry) for entry in self.record["pools"]],
+        )
+        alone = ev.evaluate(ev.read_inputs(self.drawn), resamples=200)
+        self.assertEqual(ev.entry_counts(alone), (1, 0))
+        self.assertEqual(ev.entry_labels(alone), ["Pool 1 of 1"])
+
+    def test_the_run_report_shows_the_value_and_its_source(self):
+        drawn, _ = render(read_run(self.drawn[0]))
+        value = self.DRAWN[0]
+        self.assertIn(
+            f"- Instance value: `{value}`, drawn for this run. The data of every case"
+            f" were built from it; `werkbank run --instance {value}` repeats"
+            " them, and a run repeated that way enters no pool\n",
+            drawn,
+        )
+        self.assertNotIn("given with", drawn)
+        given, document = render(read_run(self.given[0]))
+        line = (
+            f"- Instance value: `{self.GIVEN}`, given with `--instance`. The data"
+            " of every case were built from it, as in the run it repeats; a run"
+            " with a given value serves reproduction and enters no pool\n"
+        )
+        self.assertIn(line, given)
+        self.assertNotIn("drawn for this run", given)
+        # The HTML report is the same text, escaped.
+        self.assertIn(line.replace("`", "&#x60;"), document.replace("`", "&#x60;"))
+        # The line follows the plan's own record of the source.
+        view = read_run(self.given[0])
+        view.plan["instance"] = {"value": self.GIVEN, "source": "drawn"}
+        self.assertIn(f"`{self.GIVEN}`, drawn for this run.", render(view)[0])
+
+    def test_the_exports_carry_the_values_and_name_the_given_entries(self):
+        rendered = tables.outputs(self.record)
+        rows = list(
+            csv.DictReader(
+                io.StringIO(rendered[f"{tables.DATA}/pools.csv"].decode(), newline="")
+            )
+        )
+        header = list(rows[0])
+        # Beside the seeds.
+        at = header.index("seeds")
+        self.assertEqual(header[at : at + 3], ["seeds", "instances", "flags"])
+        for row, entry in zip(rows, self.record["pools"], strict=True):
+            self.assertEqual(json.loads(row["instances"]), entry["instances"])
+            self.assertEqual(json.loads(row["seeds"]), entry["seeds"])
+        given = self.entry(self.given[0])
+        (row,) = [row for row in rows if row["pool"] == given["key"]]
+        self.assertEqual(row["instances"], f'["{self.GIVEN}","{self.GIVEN}"]')
+        self.assertEqual(
+            (row["flags"], row["evaluable"]), ('["given_instance"]', "false")
+        )
+        self.assertEqual(row["score_points"], "")
+        card = rendered[tables.MODEL_CARD].decode()
+        pool = self.entry(self.drawn[0])
+        self.assertIn(f"- Pool `{pool['key'][:12]}`: 3 runs; flags: none\n", card)
+        self.assertIn(
+            f"- Runs with a given instance value `{given['key'][:12]}`: 2 runs;"
+            " flags: given_instance\n",
+            card,
+        )
+        self.assertEqual(card.count("- Not evaluated: given_instance\n"), 2)
+        dataset = rendered[tables.CARD].decode()
+        self.assertIn(
+            "6 runs in 1 pools and 2 entries of runs with a given instance value;",
+            dataset,
+        )
+        self.assertIn(
+            "Runs appear only by run ID, with their seeds and instance values per"
+            " pool;",
+            dataset,
+        )
+
+    def test_the_record_validates_and_its_instances_are_checked(self):
+        record = written(self.record)
+        Draft202012Validator(SCHEMA).validate(record)
+        check.check_shape(record)
+        check.check_consistency(record)
+        index = record["pools"].index(self.entry(self.given[0]))
+
+        def changed(change):
+            copied = copy.deepcopy(record)
+            change(copied["pools"][index])
+            return copied
+
+        for name, change, shaped in (
+            # A given entry holds one value.
+            ("two values", lambda e: e["instances"].__setitem__(1, self.OTHER), True),
+            # One value per run.
+            ("a value too few", lambda e: e["instances"].pop(), True),
+            ("a seed too few", lambda e: e["seeds"].pop(), True),
+            # It is never asked for repetitions, and never evaluated.
+            (
+                "repetitions",
+                lambda e: e["flags"].insert(0, "too_few_repetitions"),
+                True,
+            ),
+            ("evaluable", lambda e: e.update(evaluable=True), True),
+            ("no value", lambda e: e.pop("instances"), False),
+            ("no 16 hex digits", lambda e: e.update(instances=["2" * 15] * 2), False),
+            ("upper case", lambda e: e.update(instances=["A" * 16] * 2), False),
+        ):
+            with self.subTest(name):
+                broken = changed(change)
+                if shaped:
+                    check.check_shape(broken)
+                    with self.assertRaisesRegex(RecordError, "inconsistent"):
+                        check.check_consistency(broken)
+                else:
+                    with self.assertRaisesRegex(RecordError, "documented shape"):
+                        check.check_shape(broken)
+                    self.assertFalse(Draft202012Validator(SCHEMA).is_valid(broken))
+
+    def test_runs_of_one_entry_never_mix_given_and_drawn_values(self):
+        views = ev.read_inputs([self.drawn[0], self.given[0]])
+        with mock.patch.object(ev, "pool_key", return_value="0" * 64):
+            with self.assertRaisesRegex(RecordError, "mix given and drawn"):
+                ev.evaluate(views, resamples=200)
+
+
 class Recommendation(unittest.TestCase):
     """The recommended cap and context as a hint on recorded runs of one
     build and case set: with the recommended cap of 32,768 tokens A09 needs
@@ -1905,18 +2355,24 @@ class Recommendation(unittest.TestCase):
         cls.temp = tempfile.TemporaryDirectory()
         cls.root = Path(cls.temp.name)
 
+        cls.paths = []
+
         def record(name, endpoint, max_tokens_per_call=32768, **kwargs):
-            path = cls.root / name
-            local_run(
-                endpoint(
-                    script("A06", "gold") + script("A09", "fail"), {"temperature": 0}
-                ),
-                path,
-                ("A06", "A09"),
-                max_tokens_per_call=max_tokens_per_call,
-                **kwargs,
-            )
-            return path
+            """Three runs of one setup; returns the first."""
+            for seed in range(3):
+                path = cls.root / f"{name}{seed}"
+                local_run(
+                    endpoint(
+                        script("A06", "gold") + script("A09", "fail"),
+                        {"temperature": 0, "seed": seed},
+                    ),
+                    path,
+                    ("A06", "A09"),
+                    max_tokens_per_call=max_tokens_per_call,
+                    **kwargs,
+                )
+                cls.paths.append(path)
+            return cls.root / f"{name}0"
 
         cls.small = record("small", Small, serving_note=SERVING_NOTE)
         cls.wide = record("wide", Served, serving_note=SERVING_NOTE)
@@ -1928,14 +2384,6 @@ class Recommendation(unittest.TestCase):
         cls.reference = record(
             "reference", Fitting, serving_note=SERVING_NOTE, max_tokens_per_call=65536
         )
-        cls.paths = [
-            cls.small,
-            cls.wide,
-            cls.capped,
-            cls.unknown,
-            cls.fitting,
-            cls.reference,
-        ]
         cls.output = cls.root / "evaluation"
         cls.record = ev.write_evaluation(cls.paths, cls.output, resamples=200)
 
@@ -2104,7 +2552,7 @@ class Recommendation(unittest.TestCase):
 
 class ServerDefault(unittest.TestCase):
     """Runs without sampling settings (`{}`, or a seed alone): the server's
-    default sampling, which counts like a temperature above 0."""
+    default sampling."""
 
     @classmethod
     def setUpClass(cls):
@@ -2147,13 +2595,15 @@ class ServerDefault(unittest.TestCase):
         self.assertIn(line, rendered[ev.MARKDOWN].decode())
         self.assertIn(line, rendered[tables.MODEL_CARD].decode())
         self.assertIn(
-            "- Not evaluated: without temperature 0 (server default or above 0)"
-            " at least 3 repetitions come first",
+            "- Not evaluated: a pool needs at least 3 runs for scores, whatever"
+            " its sampling; this one has 1",
             ev.render(alone)[0],
         )
         markdown, _ = render(read_run(self.runs[1]))
         self.assertIn(
-            "- Sampling: server default, seed 1; needs at least three repetitions",
+            "- Sampling: server default, seed 1\n- Repetitions: one run has no"
+            " score; a pool needs at least 3 runs of one setup, at temperature 0"
+            " too (`werkbank compare`)\n",
             markdown,
         )
 

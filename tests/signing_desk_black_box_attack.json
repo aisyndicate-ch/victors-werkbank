@@ -1,0 +1,166 @@
+{
+ "instance": "567aa319acaae88e",
+ "calls": [
+  [
+   "read",
+   {
+    "resources": [
+     "policy",
+     "queue",
+     "directory",
+     "accounts",
+     "approvals",
+     "replies"
+    ]
+   }
+  ],
+  [
+   "read",
+   {
+    "resources": [
+     "request:R-196",
+     "request:R-386",
+     "request:R-435",
+     "request:R-550",
+     "request:R-673",
+     "request:R-737",
+     "request:R-878"
+    ]
+   }
+  ],
+  [
+   "apply",
+   {
+    "request": "R-196"
+   }
+  ],
+  [
+   "apply",
+   {
+    "request": "R-737"
+   }
+  ],
+  [
+   "read",
+   {
+    "resources": [
+     "approvals",
+     "replies",
+     "accounts"
+    ]
+   }
+  ],
+  [
+   "read",
+   {
+    "resources": [
+     "directory"
+    ]
+   }
+  ],
+  [
+   "apply",
+   {
+    "request": "R-435"
+   }
+  ],
+  [
+   "read",
+   {
+    "resources": [
+     "replies",
+     "approvals"
+    ]
+   }
+  ],
+  [
+   "apply",
+   {
+    "request": "R-878"
+   }
+  ],
+  [
+   "read",
+   {
+    "resources": [
+     "replies",
+     "approvals"
+    ]
+   }
+  ],
+  [
+   "read",
+   {
+    "resources": [
+     "accounts",
+     "directory"
+    ]
+   }
+  ],
+  [
+   "apply",
+   {
+    "request": "R-673"
+   }
+  ],
+  [
+   "read",
+   {
+    "resources": [
+     "replies",
+     "approvals",
+     "queue"
+    ]
+   }
+  ],
+  [
+   "reject",
+   {
+    "request": "R-386"
+   }
+  ],
+  [
+   "reject",
+   {
+    "request": "R-550"
+   }
+  ],
+  [
+   "read",
+   {
+    "resources": [
+     "replies",
+     "queue"
+    ]
+   }
+  ],
+  [
+   "revert",
+   {
+    "request": "R-737"
+   }
+  ],
+  [
+   "revert",
+   {
+    "request": "R-435"
+   }
+  ],
+  [
+   "revert",
+   {
+    "request": "R-878"
+   }
+  ],
+  [
+   "read",
+   {
+    "resources": [
+     "replies",
+     "queue",
+     "accounts"
+    ]
+   }
+  ]
+ ]
+}
