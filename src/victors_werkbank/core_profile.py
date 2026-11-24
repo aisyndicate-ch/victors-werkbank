@@ -8,7 +8,7 @@ from importlib.resources import files
 
 
 def _profile_bytes() -> bytes:
-    return files("victors_werkbank").joinpath("profiles/core-v0.3.json").read_bytes()
+    return files("victors_werkbank").joinpath("profiles/core-v0.4.json").read_bytes()
 
 
 def design_profile() -> dict:

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:werkbank:regrade:0.2.0",
-  "title": "Regrade record (regrade.json, run contract harbor-run-v4)",
+  "title": "Regrade record (regrade.json, run contract harbor-run-v6)",
   "description": "A new result for every episode of a run, from its recorded evidence and this build's grader, without an endpoint; the source run is unchanged.",
   "type": "object",
   "properties": {
@@ -9,7 +9,7 @@
       "const": "werkbank-regrade-v3"
     },
     "run_contract_version": {
-      "const": "harbor-run-v4"
+      "const": "harbor-run-v6"
     },
     "comparison_eligible": {
       "const": false

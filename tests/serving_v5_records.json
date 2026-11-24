@@ -1,0 +1,215 @@
+{
+ "_comment": "Records of serving format werkbank-serving-v5, written by the build that wrote that format; the reader keeps them valid with the same identity. In that format only vllm, llamacpp and sglang chose an engine probe, so the Ollama and LM Studio listings record none.",
+ "records": {
+  "lmstudio": {
+   "configuration": {
+    "harness_sha256": "abababababababababababababababababababababababababababababababab",
+    "max_tokens_per_call": 65536,
+    "sampling": {
+     "chat_template_kwargs": {
+      "enable_thinking": false
+     },
+     "temperature": 1
+    },
+    "streaming": false
+   },
+   "engine": {
+    "chat_template_defaults": {
+     "reason": "not reported",
+     "sha256": null,
+     "variables": null
+    },
+    "context_tokens": null,
+    "kv_cache_dtype": null,
+    "model_path": null,
+    "quantization": null,
+    "reason": "not requested for this runtime",
+    "runtime": null,
+    "speculative_decoding": null,
+    "version": null
+   },
+   "format": "werkbank-serving-v5",
+   "hardware_class": null,
+   "host": {
+    "accelerators": null,
+    "label": null,
+    "reason": "not probed"
+   },
+   "identity": {
+    "complete": false,
+    "conflicts": [],
+    "missing": [
+     "accelerator",
+     "accelerator_memory_gib",
+     "chat_template",
+     "compute_runtime",
+     "driver_version",
+     "kv_cache_dtype",
+     "memory_type",
+     "model_revision",
+     "quantization",
+     "serving_host_os",
+     "serving_runtime",
+     "serving_version",
+     "speculative_decoding",
+     "tool_call_parser"
+    ],
+    "sha256": "32573818ef2776e355b00c25f394404e49347e94ca7624b4ae4f1536155c6276"
+   },
+   "models": {
+    "entry": {
+     "id": "qwen-local",
+     "max_model_len": null,
+     "owned_by": "organization_owner",
+     "parent": null,
+     "root": null
+    },
+    "listed": 1,
+    "reason": null
+   },
+   "owner_note": {
+    "context_profile": 262144,
+    "format": "werkbank-serving-note-v2"
+   }
+  },
+  "ollama": {
+   "configuration": {
+    "harness_sha256": "abababababababababababababababababababababababababababababababab",
+    "max_tokens_per_call": 65536,
+    "sampling": {
+     "chat_template_kwargs": {
+      "enable_thinking": false
+     },
+     "temperature": 1
+    },
+    "streaming": false
+   },
+   "engine": {
+    "chat_template_defaults": {
+     "reason": "not reported",
+     "sha256": null,
+     "variables": null
+    },
+    "context_tokens": null,
+    "kv_cache_dtype": null,
+    "model_path": null,
+    "quantization": null,
+    "reason": "not requested for this runtime",
+    "runtime": null,
+    "speculative_decoding": null,
+    "version": null
+   },
+   "format": "werkbank-serving-v5",
+   "hardware_class": null,
+   "host": {
+    "accelerators": null,
+    "label": null,
+    "reason": "not probed"
+   },
+   "identity": {
+    "complete": false,
+    "conflicts": [],
+    "missing": [
+     "accelerator",
+     "accelerator_memory_gib",
+     "chat_template",
+     "compute_runtime",
+     "driver_version",
+     "kv_cache_dtype",
+     "memory_type",
+     "model_revision",
+     "quantization",
+     "serving_host_os",
+     "serving_runtime",
+     "serving_version",
+     "speculative_decoding",
+     "tool_call_parser"
+    ],
+    "sha256": "84c60a8e7e873c92f160dd0c816eb2ac9b4b4b519427c6ab026d43f4929d6636"
+   },
+   "models": {
+    "entry": {
+     "id": "qwen-local",
+     "max_model_len": null,
+     "owned_by": "library",
+     "parent": null,
+     "root": null
+    },
+    "listed": 1,
+    "reason": null
+   },
+   "owner_note": {
+    "context_profile": 262144,
+    "format": "werkbank-serving-note-v2"
+   }
+  },
+  "sglang": {
+   "configuration": {
+    "harness_sha256": "abababababababababababababababababababababababababababababababab",
+    "max_tokens_per_call": 65536,
+    "sampling": {
+     "chat_template_kwargs": {
+      "enable_thinking": false
+     },
+     "temperature": 1
+    },
+    "streaming": false
+   },
+   "engine": {
+    "chat_template_defaults": {
+     "reason": null,
+     "sha256": null,
+     "variables": {
+      "enable_thinking": true
+     }
+    },
+    "context_tokens": 262144,
+    "kv_cache_dtype": null,
+    "model_path": null,
+    "quantization": "fp8",
+    "reason": null,
+    "runtime": "sglang",
+    "speculative_decoding": null,
+    "version": "0.5.3"
+   },
+   "format": "werkbank-serving-v5",
+   "hardware_class": null,
+   "host": {
+    "accelerators": null,
+    "label": null,
+    "reason": "not probed"
+   },
+   "identity": {
+    "complete": false,
+    "conflicts": [],
+    "missing": [
+     "accelerator",
+     "accelerator_memory_gib",
+     "chat_template",
+     "compute_runtime",
+     "driver_version",
+     "kv_cache_dtype",
+     "memory_type",
+     "model_revision",
+     "quantization",
+     "serving_host_os",
+     "speculative_decoding",
+     "tool_call_parser"
+    ],
+    "sha256": "5305b3710354cc7769c7c0800e77a8d201d6dbdfd6191e1438fc7a6eb7c122ab"
+   },
+   "models": {
+    "entry": {
+     "id": "qwen-local",
+     "max_model_len": 262144,
+     "owned_by": "sglang",
+     "parent": null,
+     "root": null
+    },
+    "listed": 1,
+    "reason": null
+   },
+   "owner_note": null
+  }
+ }
+}

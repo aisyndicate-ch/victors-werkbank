@@ -1,6 +1,7 @@
 """The steps of a submission, in order: the questions, the checks, the
-summary, the consent text and the prompts; then, only after an explicit `y`
-at a terminal, one send or one written file.
+summary, the consent text and the prompts, with raw data the leaderboard's
+consent text, its question and the display name; then, only after an
+explicit `y` at a terminal, one send or one written file.
 
 Exit codes: 0 a confirmed receipt or a written file; 2 refused before the
 confirmation, something needs fixing; 3 nothing confirmed (declined, end of
@@ -12,7 +13,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Sequence, TextIO
+from typing import Any, Callable, Sequence, TextIO
 
 from victors_werkbank import __version__
 from victors_werkbank.agent.episode import harness_digest
@@ -22,10 +23,12 @@ from victors_werkbank.grading.evidence import (
     sha256,
     write_exclusive,
 )
+from victors_werkbank.registry import case_sets, scored_cases, scored_sets
 from victors_werkbank.results.comparison import SOURCE_TEXTS
+from victors_werkbank.results.evaluation import entry_labels
 from victors_werkbank.results.report import case_set_text
 
-from . import archive, contents, identity, privacy, receiver, send, texts
+from . import archive, contents, identity, leaderboard, privacy, receiver, send, texts
 
 CONFIRMED = 0
 REFUSED = 2
@@ -40,7 +43,15 @@ OTHER_FILE = (
     "{path} already exists with other content; move it away or give --write FILE."
 )
 ALREADY_WRITTEN = "Already written: {path} holds exactly this archive."
+NAMED_TOO_LARGE = (
+    "The archive with raw data and the display name breaks the archive limits."
+)
 SHOWN_FINDINGS = 20
+
+# The archive with raw data published under a display name (None for
+# "anonymous"): (its body, or None beyond the archive limits, and the privacy
+# check's findings in its envelope, which hold the name).
+Published = Callable[[str | None], tuple[bytes | None, list[privacy.Finding]]]
 
 
 class Console:
@@ -118,7 +129,49 @@ def _questions(console: Console) -> dict[str, str | None]:
     return answers
 
 
-def _pool_lines(number: int, count: int, pool: dict[str, Any]) -> list[str]:
+def leaderboard_set() -> str | None:
+    """The case set the leaderboard takes: the scored set that holds every
+    scored case, the Full set; None where no scored set does."""
+    every = sorted(scored_cases())
+    sets = case_sets()
+    for name in scored_sets():
+        if sorted(sets[name]) == every:
+            return name
+    return None
+
+
+def ranked(case_set: dict[str, Any]) -> bool:
+    """Whether results on `case_set` can enter the leaderboard: only those
+    on the Full set (`leaderboard_set`), never another scored set, a
+    module's, a trial's or an own selection."""
+    name = case_set["name"]
+    return name is not None and name == leaderboard_set()
+
+
+def _display_name(console: Console, published: Published) -> tuple[bytes, str | None]:
+    """The body published under the display name the tester types, asked
+    again until the name has the accepted form and the privacy check finds
+    nothing in it; Enter gives "anonymous". EOFError at the end of input,
+    contents.Refusal when the name makes the archive break its limits."""
+    while True:
+        try:
+            name = leaderboard.display_name(console.ask(texts.DISPLAY_NAME))
+        except leaderboard.NameRefused:
+            console.say(texts.NAME_AGAIN)
+            continue
+        body, found = published(name)
+        if found:
+            kinds = sorted({finding.kind for finding in found})
+            console.say(texts.NAME_PRIVATE.format(kind=", ".join(kinds)))
+            continue
+        if body is None:
+            raise contents.Refusal(NAMED_TOO_LARGE)
+        return body, name
+
+
+def _pool_lines(label: str, pool: dict[str, Any]) -> list[str]:
+    """One entry of the evaluation in the summary, under its name: a pool,
+    or runs with a given instance value, which are no pool."""
     serving = [
         f"{name} {_shown(str(value))}"
         for name, value in pool["serving"].items()
@@ -130,7 +183,7 @@ def _pool_lines(number: int, count: int, pool: dict[str, Any]) -> list[str]:
     ]
     hardware = pool["hardware"]
     return [
-        f"Pool {number} of {count}",
+        label,
         f"  Served model: {_shown(pool['model_id'])}",
         f"  Serving settings: {', '.join(serving) or 'none recorded'}",
         f"  Run configuration: {', '.join(configuration)}",
@@ -168,8 +221,8 @@ def _summary(
         if contact
         else f"Deletion contact: {texts.NO_CONTACT}",
     ]
-    for number, pool in enumerate(pools, 1):
-        lines += _pool_lines(number, len(pools), pool)
+    for label, pool in zip(entry_labels(record), pools, strict=True):
+        lines += _pool_lines(label, pool)
     count = len(case_set["case_ids"])
     # As the result page names it; a named set with its size.
     shown = case_set_text(case_set["name"], case_set["case_ids"])
@@ -338,7 +391,7 @@ def _submit(
         say(contents.CHANGED)
         say(texts.NOTHING_SENT)
         return REFUSED
-    found, always, raw, without, with_raw, dropped = prepared
+    found, always, raw, without, with_raw, dropped, published = prepared
     for line in _summary(
         address=address,
         target=target,
@@ -359,6 +412,19 @@ def _submit(
     try:
         include = with_raw is not None and console.confirm(texts.INCLUDE_RAW)
         body = with_raw if include and with_raw is not None else without
+        if include and not ranked(found.case_set):
+            say(texts.NOT_RANKED)
+        elif include:
+            say("")
+            say(texts.LEADERBOARD_CONSENT_TEXT)
+            if console.confirm(texts.PUBLISH):
+                body, name = _display_name(console, published)
+                say("Leaderboard: publish yes")
+                say(f"Display name: {texts.ANONYMOUS if name is None else name}")
+            else:
+                say("Leaderboard: publish no")
+        else:
+            say(texts.NO_RAW_NOT_PUBLISHED)
         say(f"Archive: {len(body)} bytes, SHA-256 {sha256(body)}")
         path = write if write is not None else default_file(evaluation, body)
         if to_file:
@@ -381,6 +447,10 @@ def _submit(
     except EOFError:
         say(f"\n{nothing}")
         return NOT_CONFIRMED
+    except contents.Refusal as error:
+        say(str(error))
+        say(nothing)
+        return REFUSED
     if stored is None:
         try:
             identity.store(id_path, installation_id)
@@ -430,10 +500,12 @@ def _prepare(
     bytes,
     bytes | None,
     str | None,
+    Published,
 ]:
     """The checks of a submission and both archives: (the evaluation, the
     always-sent members, the raw members, the body without raw data, the
-    body with it or None, and why raw data cannot be included)."""
+    body with it or None, why raw data cannot be included, and how the body
+    with raw data is built for publication under a display name)."""
     found = contents.evaluation(evaluation, sources)
     page = contents.result_page(result, evaluation, found.sha256)
     always = sorted(found.members + page)
@@ -447,7 +519,11 @@ def _prepare(
         except contents.RawTooLarge:
             dropped = "the raw data would exceed the archive limits"
 
-    def members(raw_members: list[tuple[str, bytes]]) -> list[tuple[str, bytes]]:
+    def members(
+        raw_members: list[tuple[str, bytes]],
+        publish: bool = False,
+        display_name: str | None = None,
+    ) -> list[tuple[str, bytes]]:
         listed = sorted(always + raw_members)
         head = archive.envelope(
             installation_id=installation_id,
@@ -457,6 +533,9 @@ def _prepare(
             answers=answers,
             raw_data=bool(raw_members),
             members=listed,
+            offered=bool(raw_members) and ranked(found.case_set),
+            publish=publish,
+            display_name=display_name,
         )
         return [(archive.ENVELOPE, head), *listed]
 
@@ -511,4 +590,20 @@ def _prepare(
                 if len(with_raw) > archive.MAX_BODY_BYTES:
                     with_raw = None
                     dropped = "the archive with raw data would be larger than 64 MiB"
-    return found, always, raw, without, with_raw, dropped
+
+    def published(
+        display_name: str | None,
+    ) -> tuple[bytes | None, list[privacy.Finding]]:
+        # The raw members passed the check above; only the envelope, which
+        # now holds the name, is checked again.
+        named = members(raw, True, display_name)
+        envelope_found, _ = privacy.check(named[:1], local)
+        if envelope_found:
+            return None, envelope_found
+        try:
+            body = archive.build(named)
+        except archive.ArchiveError:
+            return None, []
+        return (body if len(body) <= archive.MAX_BODY_BYTES else None), []
+
+    return found, always, raw, without, with_raw, dropped, published

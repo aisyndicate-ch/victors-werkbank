@@ -32,6 +32,7 @@ from test_replay_grade import actions_script, script
 import werkbank_result
 from victors_werkbank import registry
 from victors_werkbank.cli import main
+from victors_werkbank.domains.catalog import CATALOG
 from victors_werkbank.results import evaluation as ev
 from victors_werkbank.results import weights
 from werkbank_result import page
@@ -60,17 +61,18 @@ PASSES = (
 # three subgoals.
 NEAR = json.dumps(ALGEBRA_GOLD | {"v": {"roots": ["5"]}})
 HARDWARE_LABEL = "Example machine"
-# The facts shown; the seeds follow the run IDs' order, the engine and the
-# quantization are the scripted endpoint's, and the build changes with every
-# package change.
+# The facts shown, the setup first; the seeds follow the run IDs' order, the
+# instance values are drawn, and the build changes with every package change.
 FACTS = (
     page.FACT_MODEL,
+    page.FACT_QUANTIZATION,
+    page.FACT_ENGINE,
+    page.FACT_CONTEXT,
+    page.FACT_HARDWARE,
+    page.FACT_THINKING,
     page.FACT_CASE_SET,
     page.FACT_PASSES,
     page.FACT_SAMPLING,
-    page.FACT_THINKING,
-    page.FACT_HARDWARE,
-    page.FACT_CONTEXT,
     page.FACT_CAP,
     page.FACT_STREAMING,
 )
@@ -90,10 +92,11 @@ CATEGORIES = {
     "Data analysis": "data",
     "Retrieval": "retrieval",
     "Math": "math",
+    "Multi-turn": "multi-turn",
     "Reliability": "reliability",
     "Security": "security",
 }
-WORDS = {7: "seven"}
+WORDS = {8: "eight"}
 TASKS = "docs/TASKS.md"
 
 
@@ -184,8 +187,8 @@ def table(rows):
 
 def excerpt(document):
     """The README's example: the title and opening line, the pool's heading
-    and setup, and the sections in `SHOWN` without the legend and the effort
-    table."""
+    with its setup, the note below it and the setup's facts, and the sections
+    in `SHOWN` without the legend and the effort table."""
     parser = Blocks()
     parser.feed(document)
     blocks = parser.blocks
@@ -197,7 +200,9 @@ def excerpt(document):
         elif kind == "footer":
             break
         elif kind == "h2":
-            parts.append("\n" + value)
+            parts.append("\n" + paragraph(value, ""))
+        elif kind == "p" and value == page.SETUP_NOTE:
+            parts.append("\n" + paragraph(value))
         elif kind == "facts":
             parts.append("\n" + facts(value))
         elif kind == "h3":
@@ -360,10 +365,12 @@ class Categories(unittest.TestCase):
             },
         )
         # The registered tasks are the planned ones, category by category.
-        registered = Counter(spec.category for spec in registry.CASES.values())
+        registered = Counter(
+            registry.CASES[case_id].category for case_id in registry.scored_cases()
+        )
         self.assertEqual({k: count for k, (count, _) in stated.items()}, registered)
         self.assertIn(
-            f"{len(registry.CASES)} tasks in {WORDS[len(stated)]} categories",
+            f"{len(registry.scored_cases())} tasks in {WORDS[len(stated)]} categories",
             " ".join(overview.split()),
         )
         self.assertIn(f"]({TASKS})", overview)
@@ -378,7 +385,7 @@ class Modes(unittest.TestCase):
         for title, mode in modes.items():
             tasks, passes, context, score = stated[title]
             with self.subTest(title):
-                self.assertRegex(tasks, rf"\b{len(mode.case_ids)} (easy )?tasks\b")
+                self.assertRegex(tasks, rf"\b{len(mode.case_ids)} (easy )?tasks?\b")
                 if mode.case_set is not None:
                     self.assertIn(f"`{mode.case_set}`", tasks)
                 self.assertEqual(int(passes), len(mode.seeds))
@@ -392,13 +399,24 @@ class Modes(unittest.TestCase):
                 self.assertEqual(context, f"{recommended // 1024}K")
                 # Only a scored case set has a weighted overall score.
                 self.assertEqual(
-                    score, "yes" if mode.case_set in registry.SCORED_SETS else "no"
+                    score, "yes" if mode.case_set in registry.scored_sets() else "no"
                 )
         text = " ".join(start.split())
         self.assertIn(
             f"per-response cap of {registry.MIN_TOKENS_PER_CALL:,} tokens", text
         )
         self.assertIn(f"larger cap of {flow.LARGEST_CAP:,}", text)
+
+    def test_every_pass_draws_data_for_every_task(self):
+        # The guided start's own words, while the catalog marks every case.
+        self.assertTrue(all(CATALOG[case_id].per_run for case_id in registry.CASES))
+        start = " ".join(
+            section(README.read_text(encoding="utf-8"), "### Guided start").split()
+        )
+        stated = "Each pass gets newly drawn data for every task"
+        self.assertTrue(flow.DRAWN_DATA.startswith(stated))
+        self.assertIn(stated, start)
+        self.assertNotIn("tasks that vary", start)
 
     def test_the_trial_s_tasks_are_easy_ones_of_every_category(self):
         profile = weights.design_profile()

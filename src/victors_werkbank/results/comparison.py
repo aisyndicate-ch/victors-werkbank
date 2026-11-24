@@ -14,7 +14,16 @@ that differs is named, and the pair's kind is `engine`, `kv_cache` or
 `mixed`, always `mixed` where a setting is unknown on either side. A pair's category delta
 is the mean of the paired case families' rate differences, with a paired
 cluster bootstrap over those differences; there is no test, no multiplicity
-correction and no ranking. The Pareto view puts seconds per solved case
+correction and no ranking.
+
+Beside the pairs, every two evaluable pools of one ranking group, whatever
+their model or hardware, have a paired difference: the same computation,
+which names no cause. Its bootstrap draws the same families as each pool's
+own interval (same seed, same strata in the same order), so a resample of
+the difference is the difference of the two pools' resamples. Two pools of a
+ranking or a Pareto view are separable when their paired interval excludes
+0, and by their own intervals only where no paired interval exists. The
+Pareto view puts seconds per solved case
 against the rate on measured cases (per category) or the points on the
 measured case set (overall) and never combines them into one number. Every
 value here is a budget-score value: censored attempts count as not solved,
@@ -24,7 +33,7 @@ and nothing is difficulty evidence.
 import json
 from typing import Any
 
-from ..registry import CASES, planned_counts
+from ..registry import CASES, planned_counts, scored_set
 from ..serving import ENGINE_SETTINGS, MAX_TEXT, TEMPLATE_DEFAULTS
 from .uncertainty import MIN_FAMILIES, bootstrap, interval
 
@@ -261,9 +270,9 @@ def pairing_key(entry: dict[str, Any], members: list[Any]) -> str | None:
     model revision from the serving note, the quantization noted or reported
     by the engine) under the same run configuration, container image, order
     of the evaluated cases (`case_order`) and hardware statement; None for a
-    pool that is not evaluable, whose weights are not known or whose runs
-    differ in case order."""
-    if not entry["evaluable"]:
+    pool that is not evaluable, of a module's cases (which stand outside every
+    score), whose weights are not known or whose runs differ in case order."""
+    if not entry["evaluable"] or entry["module"] is not None:
         return None
     orders = {case_order(entry, view) for view in members}
     if len(orders) != 1:
@@ -332,6 +341,24 @@ def _family(attempts: list[Any]) -> tuple[float | None, bool]:
     return sum(a.passed for a in done) / len(done), len(done) == len(attempts)
 
 
+# Decimal places a paired difference keeps: rates are fractions of
+# repetitions and points their weighted sums, so a residual below this is
+# floating-point cancellation, never a difference, and settles to 0.
+SETTLED_DIGITS = 9
+
+
+def settled(value: float) -> float:
+    """A difference without floating-point residue, so equal sides give
+    exactly 0 (never -0.0)."""
+    return round(value, SETTLED_DIGITS) + 0.0
+
+
+def above_zero(values: list[float]) -> float:
+    """The share of bootstrap resamples above 0: how often the resampled
+    difference favours the first pool. No test and no verdict."""
+    return sum(value > 0 for value in values) / len(values)
+
+
 def paired(
     profile: dict[str, Any],
     case_ids: list[str],
@@ -342,9 +369,11 @@ def paired(
     seed: int,
 ) -> dict[str, Any]:
     """Per category the paired families' differences (first minus second),
-    their mean, a paired cluster-bootstrap interval and the paired case wins;
-    overall the difference in points on the case set, only where both pools
-    measured every attempt of every family."""
+    their mean, a paired cluster-bootstrap interval with the share of its
+    resamples above 0 and the paired case wins; overall the case wins over
+    every category and the difference in points on the case set with its
+    interval and share, only where both pools measured every attempt of
+    every family."""
     weights, planned = profile["weights_percent"], planned_counts(profile, case_ids)
     rows: dict[str, dict[str, Any]] = {}
     strata: dict[str, list[float]] = {}
@@ -373,8 +402,9 @@ def paired(
             "families": len(families),
             "paired_families": len(found),
             "unpaired_families": len(families) - len(found),
-            "delta": sum(values) / len(values) if values else None,
+            "delta": settled(sum(values) / len(values)) if values else None,
             "interval": None,
+            "share_above_zero": None,
             "first_better": sum(v > 0 for v in values),
             "second_better": sum(v < 0 for v in values),
             "ties": sum(v == 0 for v in values),
@@ -389,25 +419,46 @@ def paired(
         if len(values) >= MIN_FAMILIES:
             strata[category] = values
     draws = bootstrap(strata, resamples=resamples, seed=seed) if strata else {}
+    # Each level settles after its own aggregation: a category's resampled
+    # means here, the overall totals from the unsettled means below.
     for category, means in draws.items():
+        means = [settled(mean) for mean in means]
         rows[category]["interval"] = list(interval(means))
-    overall: dict[str, Any] = {"complete": complete, "points": None, "interval": None}
+        rows[category]["share_above_zero"] = above_zero(means)
+    overall: dict[str, Any] = {
+        "complete": complete,
+        "points": None,
+        "interval": None,
+        "share_above_zero": None,
+        **{
+            key: sum(row[key] for row in rows.values())
+            for key in ("first_better", "second_better", "ties")
+        },
+    }
     if complete:
         # Both pools measured every attempt, so their unmeasured parts are
         # the same planned cases: lower and upper bounds differ by this.
-        overall["points"] = sum(
-            weights[k] * sum(f["difference"] for f in row["cases"]) / planned[k]
-            for k, row in rows.items()
+        overall["points"] = settled(
+            sum(
+                weights[k] * sum(f["difference"] for f in row["cases"]) / planned[k]
+                for k, row in rows.items()
+            )
         )
         if set(draws) == set(rows):
             totals = [
-                sum(
-                    weights[k] * draws[k][index] * row["paired_families"] / planned[k]
-                    for k, row in rows.items()
+                settled(
+                    sum(
+                        weights[k]
+                        * draws[k][index]
+                        * row["paired_families"]
+                        / planned[k]
+                        for k, row in rows.items()
+                    )
                 )
                 for index in range(resamples)
             ]
             overall["interval"] = list(interval(totals))
+            overall["share_above_zero"] = above_zero(totals)
     return {"categories": rows, "overall": overall}
 
 
@@ -458,6 +509,89 @@ def comparisons(
                     }
                 )
     return sorted(found, key=lambda item: (item["first"], item["second"]))
+
+
+def rank_order(entry: dict[str, Any]) -> tuple[bool, float, str]:
+    """How a difference orders two pools: by point score, the higher first,
+    then the pools without one; equal scores and pools without one by key."""
+    points = entry["scores"]["overall"]["points"]["score"]
+    return (points is None, 0.0 if points is None else -points, entry["key"])
+
+
+def differences(
+    profile: dict[str, Any],
+    entries: list[dict[str, Any]],
+    tries: dict[str, dict[str, list[Any]]],
+    *,
+    resamples: int,
+    seed: int,
+) -> list[dict[str, Any]]:
+    """Every two evaluable pools of one ranking group (`groups`: build and
+    case set), whatever their model, serving or hardware, as `paired` gives
+    them, the first minus the second in `rank_order`; the overall points only
+    on a scored case set, where the pools have point scores."""
+    found = []
+    for _, case_ids, members in groups(entries):
+        ranked = sorted(
+            (entry for entry in members if entry["scores"] is not None),
+            key=rank_order,
+        )
+        for index, first in enumerate(ranked):
+            for second in ranked[index + 1 :]:
+                result = paired(
+                    profile,
+                    list(case_ids),
+                    tries[first["key"]],
+                    tries[second["key"]],
+                    resamples=resamples,
+                    seed=seed,
+                )
+                if scored_set(case_ids) is None:
+                    result["overall"].update(
+                        points=None, interval=None, share_above_zero=None
+                    )
+                found.append(
+                    {
+                        "configuration": group_configuration(first),
+                        "case_ids": list(case_ids),
+                        "first": first["key"],
+                        "second": second["key"],
+                        **result,
+                    }
+                )
+    return found
+
+
+def paired_bounds(
+    found: list[dict[str, Any]],
+) -> dict[frozenset[str], dict[str, list[float] | None]]:
+    """The paired intervals of `differences`, per category and overall, by
+    the two pools whatever their order."""
+    return {
+        frozenset((item["first"], item["second"])): {
+            **{key: row["interval"] for key, row in item["categories"].items()},
+            "overall": item["overall"]["interval"],
+        }
+        for item in found
+    }
+
+
+def separable(
+    bounds: dict[frozenset[str], dict[str, list[float] | None]],
+    first: str,
+    second: str,
+    category: str,
+    own: tuple[list[float] | None, list[float] | None],
+) -> bool | None:
+    """Whether two pools are separable on a category or overall: by their
+    paired interval where one exists (0 outside it), otherwise by their own
+    intervals (`own`, which must not overlap); None where neither exists."""
+    found = bounds.get(frozenset((first, second)), {}).get(category)
+    if found is not None:
+        return not found[0] <= 0 <= found[1]
+    if own[0] is None or own[1] is None:
+        return None
+    return not _overlap(own[0], own[1])
 
 
 def group_configuration(entry: dict[str, Any]) -> dict[str, Any]:
@@ -532,16 +666,24 @@ def _point(entry: dict[str, Any], category: str) -> tuple[Any, ...]:
 
 
 def pareto(
-    profile: dict[str, Any], entries: list[dict[str, Any]]
+    profile: dict[str, Any],
+    entries: list[dict[str, Any]],
+    bounds: dict[frozenset[str], dict[str, list[float] | None]] | None = None,
 ) -> list[dict[str, Any]]:
     """Within one timed group (`groups`: build, case set and hardware
     statement), per category and overall: the pools no other pool dominates
     (at least as high a rate on measured cases, or lower bound in points
     overall, and at most as many seconds per solved case, one strictly), and
-    for every dominated pool all that dominate it, each marked separable only
-    where both y intervals exist and do not overlap."""
+    for every dominated pool all that dominate it, each marked `separable`
+    by the paired intervals `bounds` (`paired_bounds`) or, without one, by
+    the two y intervals. A module's pools have no rate or points and are not
+    placed."""
+    bounds = bounds or {}
     found = []
     for statement, case_ids, members in groups(entries, timed=True):
+        # A module's pools have no rate or points to place.
+        if members[0]["module"] is not None:
+            continue
         for category in [*profile["weights_percent"], "overall"]:
             if category != "overall" and not any(
                 CASES[c].category == category for c in case_ids
@@ -555,13 +697,13 @@ def pareto(
                 else:
                     placed.append((entry["key"], *point))
             rows = []
-            for key, x, y, bounds, per_attempt in placed:
+            for key, x, y, own, per_attempt in placed:
                 above = [
                     {
                         "pool": other,
-                        "separable": None
-                        if bounds is None or other_bounds is None
-                        else not _overlap(bounds, other_bounds),
+                        "separable": separable(
+                            bounds, key, other, category, (own, other_bounds)
+                        ),
                     }
                     for other, ox, oy, other_bounds, _ in placed
                     if other != key and oy >= y and ox <= x and (oy > y or ox < x)
@@ -571,7 +713,7 @@ def pareto(
                         "pool": key,
                         "seconds_per_solved": x,
                         "value": y,
-                        "interval": bounds,
+                        "interval": own,
                         "seconds_per_attempt": per_attempt,
                         "front": not above,
                         "dominated_by": above,

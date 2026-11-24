@@ -1,0 +1,68 @@
+{
+  "instance": "44654ca8786b9a64",
+  "turns": [
+    [
+      [
+        ["runbook", {}],
+        ["sites", {}]
+      ],
+      [
+        ["site", {"name": "Brantmoor"}],
+        ["site", {"name": "Varnelholt"}],
+        ["site", {"name": "Fallowmere"}],
+        ["site", {"name": "Marrowfield"}]
+      ],
+      [
+        ["log", {}],
+        ["site", {"name": "Selkentoft"}],
+        ["site", {"name": "Wexenholm"}],
+        ["site", {"name": "Ingleshaw"}]
+      ],
+      [
+        ["site", {"name": "Calderby"}],
+        ["site", {"name": "Elthwaite"}],
+        ["site", {"name": "Ironvale"}],
+        ["site", {"name": "Drummelrigg"}]
+      ],
+      [
+        ["site", {"name": "Jesmere"}],
+        ["site", {"name": "Quillhaven"}],
+        ["site", {"name": "Zennafield"}],
+        ["site", {"name": "Rennickstow"}]
+      ],
+      [
+        ["site", {"name": "Birchfold"}],
+        ["site", {"name": "Highfold"}],
+        ["site", {"name": "Corvangarth"}]
+      ],
+      [
+        ["switch", {"site": "Varnelholt", "status": "new"}],
+        ["switch", {"site": "Marrowfield", "status": "new"}],
+        ["switch", {"site": "Brantmoor", "status": "new"}],
+        ["switch", {"site": "Fallowmere", "status": "new"}]
+      ]
+    ],
+    [
+      [
+        ["switch", {"site": "Zennafield", "status": "new"}],
+        ["switch", {"site": "Selkentoft", "status": "new"}],
+        ["switch", {"site": "Elthwaite", "status": "new"}],
+        ["switch", {"site": "Ironvale", "status": "new"}]
+      ]
+    ],
+    [
+      [
+        ["switch", {"site": "Ironvale", "status": "old"}],
+        ["switch", {"site": "Elthwaite", "status": "old"}],
+        ["switch", {"site": "Selkentoft", "status": "old"}],
+        ["switch", {"site": "Zennafield", "status": "old"}]
+      ]
+    ],
+    [
+      [
+        ["switch", {"site": "Elthwaite", "status": "new"}],
+        ["report_blocked", {"site": "Drummelrigg", "waiting_for": "Selkentoft"}]
+      ]
+    ]
+  ]
+}

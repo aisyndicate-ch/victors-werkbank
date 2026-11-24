@@ -15,6 +15,7 @@ import json
 import os
 import platform
 import re
+import secrets
 import shutil
 import socket
 import stat
@@ -36,7 +37,7 @@ from test_replay_grade import script
 
 import werkbank_result
 import werkbank_submit
-from victors_werkbank import __version__
+from victors_werkbank import __version__, registry
 from victors_werkbank.agent.episode import harness_digest, harness_files
 from victors_werkbank.agent.transport import API_KEY_VARIABLE
 from victors_werkbank.harbor_smoke import SMOKE_IMAGE
@@ -47,6 +48,7 @@ from werkbank_submit import (
     contents,
     flow,
     identity,
+    leaderboard,
     privacy,
     receiver,
     send,
@@ -59,6 +61,8 @@ DOC = (ROOT / "docs" / "SUBMISSION.md").read_text(encoding="utf-8")
 ID = "0123456789abcdef0123456789abcdef"
 RUN_ID = "00000000-0000-4000-8000-000000000000"
 CONTACT = "deletion contact of the test"
+# The client's own test of a case set, before the flow tests replace it.
+RANKED = flow.ranked
 HOSTED = "registry.example/team/python@sha256:" + "a" * 64
 # A loopback address no test answers on; only refusals before contact use it.
 UNUSED = "http://127.0.0.1:9/submissions"
@@ -281,7 +285,7 @@ class Archive(unittest.TestCase):
 
 class Envelope(unittest.TestCase):
     RECORD = {
-        "format": "werkbank-evaluation-v9",
+        "format": "werkbank-evaluation-v13",
         "inputs": [
             {
                 "run_id": RUN_ID,
@@ -298,7 +302,7 @@ class Envelope(unittest.TestCase):
         ],
     }
 
-    def envelope(self, answers=None, raw_data=False):
+    def envelope(self, answers=None, raw_data=False, **leaderboard):
         return archive.envelope(
             installation_id=ID,
             evaluation=self.RECORD,
@@ -307,10 +311,13 @@ class Envelope(unittest.TestCase):
             answers=answers or {},
             raw_data=raw_data,
             members=members()[1:],
+            **leaderboard,
         )
 
     def test_the_fields_have_their_fixed_order_and_form(self):
-        data = self.envelope({"purpose": "curiosity", "plausibility": "no"}, True)
+        data = self.envelope(
+            {"purpose": "curiosity", "plausibility": "no"}, True, offered=True
+        )
         record = json.loads(data)
         self.assertTrue(data.isascii())
         self.assertEqual(data, (json.dumps(record, indent=2) + "\n").encode())
@@ -325,6 +332,7 @@ class Envelope(unittest.TestCase):
                 "runs",
                 "answers",
                 "consent",
+                "leaderboard",
                 "files",
             ],
         )
@@ -334,7 +342,7 @@ class Envelope(unittest.TestCase):
         )
         self.assertEqual(
             record["evaluation"],
-            {"format": "werkbank-evaluation-v9", "sha256": "6" * 64},
+            {"format": "werkbank-evaluation-v13", "sha256": "6" * 64},
         )
         self.assertEqual(list(record["case_set"]), ["name", "case_ids"])
         self.assertEqual(
@@ -356,7 +364,15 @@ class Envelope(unittest.TestCase):
             },
         )
         self.assertEqual(
-            record["consent"], {"text": "werkbank-consent-v2", "raw_data": True}
+            record["consent"],
+            {
+                "text": "werkbank-consent-v3",
+                "raw_data": True,
+                "leaderboard": "werkbank-leaderboard-consent-v1",
+            },
+        )
+        self.assertEqual(
+            record["leaderboard"], {"publish": False, "display_name": None}
         )
         self.assertEqual(
             record["files"],
@@ -371,24 +387,151 @@ class Envelope(unittest.TestCase):
         )
         Draft202012Validator(SCHEMA).validate(record)
 
+    def test_publication_needs_raw_data_and_a_name_publication(self):
+        record = json.loads(
+            self.envelope(
+                raw_data=True, offered=True, publish=True, display_name="Jürgen K"
+            )
+        )
+        self.assertEqual(
+            record["leaderboard"], {"publish": True, "display_name": "Jürgen K"}
+        )
+        Draft202012Validator(SCHEMA).validate(record)
+        record = json.loads(self.envelope(raw_data=True, offered=True, publish=True))
+        self.assertEqual(record["leaderboard"], {"publish": True, "display_name": None})
+        Draft202012Validator(SCHEMA).validate(record)
+        # Without raw data, or with raw data where the leaderboard was not
+        # offered, the envelope names no leaderboard text.
+        for raw_data in (False, True):
+            record = json.loads(self.envelope(raw_data=raw_data))
+            self.assertEqual(
+                (record["consent"]["leaderboard"], record["leaderboard"]),
+                (None, {"publish": False, "display_name": None}),
+            )
+            Draft202012Validator(SCHEMA).validate(record)
+        for answer in (
+            {"offered": True},
+            {"publish": True},
+            {"raw_data": True, "publish": True},
+            {"display_name": "x"},
+            {"raw_data": True, "offered": True, "display_name": "x"},
+        ):
+            with self.subTest(answer), self.assertRaises(ValueError):
+                self.envelope(**answer)
+
     def test_the_schema_refuses_free_text_and_unknown_fields(self):
         record = json.loads(self.envelope())
-        Draft202012Validator(SCHEMA).validate(record)
-        # Stored submissions of earlier builds carry the earlier consent text.
-        record["consent"]["text"] = "werkbank-consent-v1"
         Draft202012Validator(SCHEMA).validate(record)
         for change in (
             lambda r: r["answers"].update(purpose="my own words"),
             lambda r: r.update(comment="x"),
             lambda r: r["consent"].update(text="other"),
+            lambda r: r["consent"].update(text="werkbank-consent-v2"),
+            lambda r: r["consent"].update(leaderboard="werkbank-leaderboard-v9"),
             lambda r: r.update(installation_id=ID.upper()),
             lambda r: r["files"].append(
                 {"path": "/home/x", "bytes": 1, "sha256": "0" * 64}
             ),
+            lambda r: r.pop("leaderboard"),
+            lambda r: r["consent"].pop("leaderboard"),
+            lambda r: r["leaderboard"].update(publish=True),
+            lambda r: r["leaderboard"].update(comment="x"),
         ):
             changed = json.loads(self.envelope())
             change(changed)
             self.assertFalse(Draft202012Validator(SCHEMA).is_valid(changed))
+        published = json.loads(self.envelope(raw_data=True, offered=True, publish=True))
+        Draft202012Validator(SCHEMA).validate(published)
+        for name in (
+            "",
+            "x" * 33,
+            "a@b",
+            "https://x",
+            "a/b",
+            " a",
+            "a ",
+            "a\tb",
+            "a\nb",
+        ):
+            changed = json.loads(
+                self.envelope(raw_data=True, offered=True, publish=True)
+            )
+            changed["leaderboard"]["display_name"] = name
+            with self.subTest(name=name):
+                self.assertFalse(Draft202012Validator(SCHEMA).is_valid(changed))
+        for change in (
+            lambda r: r["consent"].update(leaderboard=None),
+            lambda r: r["leaderboard"].update(display_name="x", publish=False),
+        ):
+            changed = json.loads(
+                self.envelope(raw_data=True, offered=True, publish=True)
+            )
+            change(changed)
+            self.assertFalse(Draft202012Validator(SCHEMA).is_valid(changed))
+
+    def test_the_schema_still_accepts_submissions_of_earlier_builds(self):
+        """A receiver keeps reading `werkbank-submission-v1`, which has no
+        leaderboard and carries the consent text v1 or v2."""
+        for text in ("werkbank-consent-v1", "werkbank-consent-v2"):
+            record = json.loads(self.envelope(raw_data=True))
+            record["format"] = "werkbank-submission-v1"
+            record["consent"] = {"text": text, "raw_data": True}
+            del record["leaderboard"]
+            Draft202012Validator(SCHEMA).validate(record)
+        for change in (
+            lambda r: r["consent"].update(text="werkbank-consent-v3"),
+            lambda r: r.update(leaderboard={"publish": False, "display_name": None}),
+            lambda r: r["consent"].update(leaderboard=None),
+        ):
+            changed = json.loads(self.envelope())
+            changed["format"] = "werkbank-submission-v1"
+            changed["consent"] = {"text": "werkbank-consent-v2", "raw_data": False}
+            del changed["leaderboard"]
+            change(changed)
+            self.assertFalse(Draft202012Validator(SCHEMA).is_valid(changed))
+
+
+class DisplayName(unittest.TestCase):
+    """The form of a display name the client accepts."""
+
+    def test_accepted_names_are_trimmed_and_normalized(self):
+        for typed, name in (
+            ("", None),
+            ("   ", None),
+            ("Tom", "Tom"),
+            ("  Jürgen K  ", "Jürgen K"),
+            ("J\u0075\u0308rgen", "Jürgen"),
+            ("Zoë_2.0-beta 7", "Zoë_2.0-beta 7"),
+            ("Łukasz", "Łukasz"),
+            ("東京", "東京"),
+            ("7", "7"),
+            ("x" * leaderboard.MAX_NAME_CHARS, "x" * 32),
+        ):
+            with self.subTest(typed=typed):
+                self.assertEqual(leaderboard.display_name(typed), name)
+
+    def test_refused_names(self):
+        for typed in (
+            "x" * 33,
+            "me@example.org",
+            "https://example.org",
+            "example.org/me",
+            "host:8000",
+            "-me",
+            "me.",
+            "_me_",
+            "a\tb",
+            "a\nb",
+            "a\u200bb",
+            "q\u0301",
+            "\u0663",
+            "\u216b",
+            "a!b",
+            "a\\b",
+            "\u00a0a",
+        ):
+            with self.subTest(typed=typed), self.assertRaises(leaderboard.NameRefused):
+                leaderboard.display_name(typed)
 
 
 class Patterns(unittest.TestCase):
@@ -507,7 +650,9 @@ class LocalValues(unittest.TestCase):
             "vllm",
             "a06",
             "security",
-            "werkbank-submission-v1",
+            "werkbank-submission-v2",
+            "werkbank-leaderboard-consent-v1",
+            "display_name",
             # The result page's own texts and those it shares.
             "average",
             "passes",
@@ -747,12 +892,13 @@ class LocalValues(unittest.TestCase):
 
 class CaseSetLine(unittest.TestCase):
     def test_the_summary_names_the_case_set_as_the_page_does(self):
-        from victors_werkbank.registry import CASE_SETS, CASES
+        from victors_werkbank.registry import case_sets
 
-        quick = list(CASE_SETS["quick-v3"])
+        quick = list(case_sets()["quick-v5"])
+        full = list(case_sets()["full-v2"])
         for name, case_ids, line in (
-            ("quick-v3", quick, f"Case set: quick-v3, {len(quick)} cases"),
-            ("full-v1", list(CASES), f"Case set: full-v1, {len(CASES)} cases"),
+            ("quick-v5", quick, f"Case set: quick-v5, {len(quick)} cases"),
+            ("full-v2", full, f"Case set: full-v2, {len(full)} cases"),
             (None, ["A06"], "Case set: own selection (1 cases)"),
         ):
             with self.subTest(name=name, count=len(case_ids)):
@@ -1020,7 +1166,7 @@ class Sending(unittest.TestCase):
                     ("Host", f"127.0.0.1:{port}"),
                     ("Content-Type", "application/gzip"),
                     ("Content-Length", str(len(BODY))),
-                    ("X-Werkbank-Submission", "werkbank-submission-v1"),
+                    ("X-Werkbank-Submission", "werkbank-submission-v2"),
                     ("X-Werkbank-Installation", ID),
                     ("X-Werkbank-Content-SHA256", digest),
                     ("User-Agent", f"werkbank/{__version__}"),
@@ -1260,6 +1406,30 @@ class Docs(unittest.TestCase):
         block = self.section("Consent text").split("```text\n", 1)[1].split("```", 1)[0]
         self.assertEqual(block, texts.CONSENT_TEXT)
 
+    def test_the_leaderboard_texts(self):
+        blocks = [
+            block.split("```", 1)[0]
+            for block in self.section("Leaderboard").split("```text\n")[1:]
+        ]
+        self.assertEqual(
+            blocks,
+            [
+                texts.LEADERBOARD_CONSENT_TEXT,
+                texts.NAME_AGAIN + "\n",
+                texts.NAME_PRIVATE.format(kind="<kind>") + "\n",
+            ],
+        )
+        for prompt in (texts.PUBLISH, texts.DISPLAY_NAME):
+            self.assertIn(f"`{prompt.strip()}`", DOC)
+        envelope = self.section("The envelope")
+        for text in (
+            texts.SUBMISSION_FORMAT,
+            texts.CONSENT_FORMAT,
+            texts.LEADERBOARD_CONSENT_FORMAT,
+        ):
+            self.assertIn(f"`{text}`", envelope)
+        self.assertIn(f"`{texts.SUBMISSION_FORMAT}`", self.section("Sending"))
+
     def test_the_questions(self):
         rows = [
             line
@@ -1440,6 +1610,10 @@ class Flow(unittest.TestCase):
     def setUp(self):
         self.config = self.enterContext(config_home())
         self.scratch = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        # The fixture's evaluations hold two tasks, an own selection; the
+        # leaderboard's questions are asked as for the Full set, which
+        # `test_only_the_full_set_is_offered_the_leaderboard` checks.
+        self.enterContext(mock.patch.object(flow, "ranked", return_value=True))
 
     def submit(
         self,
@@ -1488,9 +1662,11 @@ class Flow(unittest.TestCase):
         )
 
     def test_a_confirmed_submission_with_raw_data(self):
+        # Raw data, publication, a refused name and an accepted one.
+        replies = [*QUESTION_REPLIES, "y", "y", "me@example", " Jürgen K ", "y"]
         with fake.serve() as (address, state):
             code, prompts, output = self.submit(
-                [*QUESTION_REPLIES, "y", "y"], sources=[self.f.gold], address=address
+                replies, sources=[self.f.gold], address=address
             )
             self.assertEqual(code, 0, output)
             envelope, found = self.sent(state)
@@ -1504,6 +1680,12 @@ class Flow(unittest.TestCase):
             QUESTION_ANSWERS,
         )
         self.assertTrue(envelope["consent"]["raw_data"])
+        self.assertEqual(
+            envelope["consent"]["leaderboard"], texts.LEADERBOARD_CONSENT_FORMAT
+        )
+        self.assertEqual(
+            envelope["leaderboard"], {"publish": True, "display_name": "Jürgen K"}
+        )
         Draft202012Validator(SCHEMA).validate(envelope)
         self.assertEqual(set(privacy._keys(envelope)) - privacy.vocabulary(), set())
         record = json.loads((self.f.evaluation / "evaluation.json").read_bytes())
@@ -1548,10 +1730,14 @@ class Flow(unittest.TestCase):
                 "Choice (1-3, Enter to skip): ",
                 "Choice (1-4, Enter to skip): ",
                 texts.INCLUDE_RAW,
+                texts.PUBLISH,
+                texts.DISPLAY_NAME,
+                texts.DISPLAY_NAME,
                 texts.SEND_NOW,
             ],
         )
         self.assertIn(texts.CHOICE_AGAIN.format(count=3), output)
+        self.assertEqual(output.count(texts.NAME_AGAIN), 1)
         self.assertIn("Received, receipt ", output)
 
     def test_the_summary_and_the_consent_text_come_before_the_prompts(self):
@@ -1585,18 +1771,154 @@ class Flow(unittest.TestCase):
             "(new; stored on this computer once you confirm)",
         ):
             self.assertIn(text, output)
-        # Prompts and output in the order they appeared.
+        # Prompts and output in the order they appeared; without raw data
+        # the leaderboard is not asked.
         lines = self.dialog.lines
         order = [
             lines.index("Summary of the submission"),
             lines.index(texts.CONSENT_TEXT),
             lines.index(texts.INCLUDE_RAW),
+            lines.index(texts.NO_RAW_NOT_PUBLISHED),
             next(i for i, line in enumerate(lines) if line.startswith("Archive: ")),
             lines.index(texts.SEND_NOW),
         ]
         self.assertEqual(order, sorted(order))
+        self.assertNotIn(texts.LEADERBOARD_CONSENT_TEXT, lines)
+        self.assertNotIn(texts.PUBLISH, lines)
         self.assertEqual(lines[-1], texts.NOTHING_SENT)
         self.assertIsNone(identity.load(self.config))
+
+    def test_the_leaderboard_is_asked_after_raw_data_and_shown_before_sending(self):
+        for replies, shown, expected in (
+            (["y", "n", "n"], ["Leaderboard: publish no"], (False, None)),
+            (["y", "", "n"], ["Leaderboard: publish no"], (False, None)),
+            (
+                ["y", "y", "", "n"],
+                ["Leaderboard: publish yes", "Display name: anonymous"],
+                (True, None),
+            ),
+            (
+                ["y", "y", "Tom 7", "n"],
+                ["Leaderboard: publish yes", "Display name: Tom 7"],
+                (True, "Tom 7"),
+            ),
+        ):
+            with self.subTest(replies=replies):
+                # A stored ID, so that the second submission is the same.
+                self.config.parent.mkdir(parents=True, exist_ok=True)
+                self.config.write_text(ID + "\n")
+                target = self.scratch / f"{secrets.token_hex(4)}.tar.gz"
+                code, prompts, output = self.submit(
+                    [*QUESTION_REPLIES, *replies], sources=[self.f.gold], write=target
+                )
+                self.assertEqual(code, 3, output)
+                lines = self.dialog.lines
+                order = [
+                    lines.index(texts.INCLUDE_RAW),
+                    lines.index(texts.LEADERBOARD_CONSENT_TEXT),
+                    lines.index(texts.PUBLISH),
+                    *(lines.index(line) for line in shown),
+                    next(i for i, x in enumerate(lines) if x.startswith("Archive: ")),
+                    lines.index(texts.WRITE_FILE),
+                ]
+                self.assertEqual(order, sorted(order))
+                # The archive the summary announces holds these answers.
+                digest = next(x for x in lines if x.startswith("Archive: ")).rsplit(
+                    " ", 1
+                )[1]
+                code, _, _ = self.submit(
+                    [*QUESTION_REPLIES, *replies[:-1], "y"],
+                    sources=[self.f.gold],
+                    write=target,
+                )
+                self.assertEqual(code, 0)
+                written = target.read_bytes()
+                self.assertEqual(hashlib.sha256(written).hexdigest(), digest)
+                envelope = json.loads(archive.read(written)[0][1])
+                self.assertEqual(
+                    (
+                        envelope["leaderboard"]["publish"],
+                        envelope["leaderboard"]["display_name"],
+                    ),
+                    expected,
+                )
+                Draft202012Validator(SCHEMA).validate(envelope)
+
+    def test_only_the_full_set_is_offered_the_leaderboard(self):
+        sets = registry.case_sets()
+        full = flow.leaderboard_set()
+        # The leaderboard's set is the scored set of every scored case.
+        self.assertIn(full, registry.scored_sets())
+        self.assertEqual(sorted(sets[full]), sorted(registry.scored_cases()))
+        self.assertTrue(RANKED({"name": full, "case_ids": sets[full]}))
+        # Another scored set, Normal among them, has points but no entry.
+        self.assertGreater(len(registry.scored_sets()), 1)
+        for name in set(sets) - {full}:
+            self.assertFalse(RANKED({"name": name, "case_ids": sets[name]}))
+        self.assertFalse(RANKED({"name": None, "case_ids": ["A06", "S05"]}))
+        self.enterContext(mock.patch.object(flow, "ranked", RANKED))
+        code, prompts, output = self.submit(
+            [*QUESTION_REPLIES, "y", "n"],
+            sources=[self.f.gold],
+            write=self.scratch / "own.tar.gz",
+        )
+        self.assertEqual(code, 3, output)
+        self.assertEqual(prompts[-2:], [texts.INCLUDE_RAW, texts.WRITE_FILE])
+        self.assertIn(texts.NOT_RANKED, self.dialog.lines)
+        self.assertNotIn(texts.LEADERBOARD_CONSENT_TEXT, self.dialog.lines)
+        # Its raw data names no leaderboard text, which was never shown.
+        target = self.scratch / "own-written.tar.gz"
+        code, _, output = self.submit(
+            [*QUESTION_REPLIES, "y", "y"], sources=[self.f.gold], write=target
+        )
+        self.assertEqual(code, 0, output)
+        envelope = json.loads(archive.read(target.read_bytes())[0][1])
+        self.assertTrue(envelope["consent"]["raw_data"])
+        self.assertIsNone(envelope["consent"]["leaderboard"])
+        self.assertEqual(
+            envelope["leaderboard"], {"publish": False, "display_name": None}
+        )
+        Draft202012Validator(SCHEMA).validate(envelope)
+
+    def test_a_display_name_is_asked_again_until_its_form_is_accepted(self):
+        refused = [
+            "x" * 33,
+            "a@b",
+            "https://x.example",
+            "a/b",
+            "a:b",
+            "-a",
+            "a.",
+            "a\u200bb",
+            "q\u0301",
+            "a\tb",
+        ]
+        code, prompts, output = self.submit(
+            [*QUESTION_REPLIES, "y", "y", *refused, "x" * 32, "n"],
+            sources=[self.f.gold],
+            write=self.scratch / "named.tar.gz",
+        )
+        self.assertEqual(code, 3, output)
+        self.assertEqual(prompts.count(texts.DISPLAY_NAME), len(refused) + 1)
+        self.assertEqual(output.count(texts.NAME_AGAIN), len(refused))
+        self.assertIn(f"Display name: {'x' * 32}", output)
+
+    def test_a_display_name_the_privacy_check_finds_is_asked_again(self):
+        values = [("a user name", "kirsten"), ("a host name", "gpu-box")]
+        code, prompts, output = self.submit(
+            [*QUESTION_REPLIES, "y", "y", "Kirsten", "gpu-box fan", "kirstenX", "n"],
+            sources=[self.f.gold],
+            write=self.scratch / "private.tar.gz",
+            values=values,
+        )
+        self.assertEqual(code, 3, output)
+        self.assertEqual(prompts.count(texts.DISPLAY_NAME), 3)
+        for kind in ("a user name", "a host name"):
+            self.assertIn(texts.NAME_PRIVATE.format(kind=kind), output)
+        self.assertIn("Display name: kirstenX", output)
+        # The finding names its kind, never the value.
+        refusals = [x for x in self.dialog.lines if x.startswith("The privacy")]
+        self.assertFalse([x for x in refusals if "irsten" in x or "gpu" in x])
 
     def test_only_an_explicit_y_sends(self):
         for final in ("n", "", "yes", "Y", " y", EOFError(), KeyboardInterrupt()):
@@ -1652,7 +1974,7 @@ class Flow(unittest.TestCase):
         backwards = ordered[::-1]
         with fake.serve() as (address, state):
             code, _, output = self.submit(
-                [*QUESTION_REPLIES, "y", "y"],
+                [*QUESTION_REPLIES, "y", "", "y"],
                 evaluation=evaluation,
                 page=page,
                 sources=backwards,
@@ -1689,6 +2011,53 @@ class Flow(unittest.TestCase):
             envelope, found = self.sent(state)
         self.assertFalse(envelope["consent"]["raw_data"])
         self.assertFalse([name for name in found if name.startswith("raw/")])
+
+    def test_the_summary_names_runs_with_a_given_instance_value_as_no_pool(self):
+        # One drawn run and one that repeats its data with the value given:
+        # a pool, and apart from it an entry that is none.
+        series = self.scratch / "given"
+        series.mkdir()
+        runs = [series / "drawn", series / "repeated"]
+        for path, value in zip(runs, (None, "0123456789abcdef"), strict=True):
+            local_run(
+                Served(script("A06", "gold"), {"temperature": 0, "seed": 0}),
+                path,
+                ("A06",),
+                instance=value,
+            )
+        evaluation = series / "evaluation"
+        record = ev.write_evaluation(runs, evaluation, resamples=100)
+        self.assertCountEqual(
+            ["given_instance" in entry["flags"] for entry in record["pools"]],
+            [False, True],
+        )
+        page = series / "result"
+        werkbank_result.write(evaluation, page)
+        code, _, output = self.submit(
+            [*QUESTION_REPLIES, "n"], evaluation=evaluation, page=page
+        )
+        self.assertEqual(code, 3, output)
+        lines = output.splitlines()
+        start = lines.index("Summary of the submission")
+        named = [
+            line
+            for line in lines[start:]
+            if line.startswith(("Pool ", "Runs with a given instance value"))
+        ]
+        self.assertCountEqual(
+            named, ["Pool 1 of 1", "Runs with a given instance value, 1 of 1"]
+        )
+        self.assertNotIn("Pool 2 of 2", output)
+        self.assertNotIn("Pool 1 of 2", output)
+        # Each is followed by its own lines, in the record's order.
+        for label in named:
+            self.assertEqual(
+                lines[lines.index(label) + 1], f"  Served model: {Served.model}"
+            )
+        self.assertEqual(
+            [("given_instance" in entry["flags"]) for entry in record["pools"]],
+            [label.startswith("Runs") for label in named],
+        )
 
     def test_without_a_receiver_the_file_goes_beside_the_evaluation(self):
         series = self.scratch / "series"
@@ -1754,10 +2123,12 @@ class Flow(unittest.TestCase):
     def test_the_written_file_is_the_archive_a_send_posts(self):
         target = self.scratch / "submission.tar.gz"
         code, prompts, output = self.submit(
-            [*QUESTION_REPLIES, "y", "y"], sources=[self.f.gold], write=target
+            [*QUESTION_REPLIES, "y", "", "y"], sources=[self.f.gold], write=target
         )
         self.assertEqual(code, 0, output)
-        self.assertEqual(prompts[-2:], [texts.INCLUDE_RAW, texts.WRITE_FILE])
+        self.assertEqual(
+            prompts[-3:], [texts.INCLUDE_RAW, texts.PUBLISH, texts.WRITE_FILE]
+        )
         self.assertIn(f"Receiver: {texts.NO_RECEIVER}", output)
         self.assertIn(f"Deletion contact: {CONTACT}", output)
         self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
@@ -1766,7 +2137,9 @@ class Flow(unittest.TestCase):
         self.assertEqual(envelope["installation_id"], identity.load(self.config))
         with fake.serve() as (address, state):
             code, _, _ = self.submit(
-                [*QUESTION_REPLIES, "y", "y"], sources=[self.f.gold], address=address
+                [*QUESTION_REPLIES, "y", "", "y"],
+                sources=[self.f.gold],
+                address=address,
             )
             self.assertEqual(code, 0)
             self.assertEqual(state.requests[0].body, written)
@@ -1807,7 +2180,7 @@ class Flow(unittest.TestCase):
         older = self.scratch / "older-format"
         shutil.copytree(self.f.evaluation, older)
         record = json.loads((older / "evaluation.json").read_bytes())
-        record["format"] = "werkbank-evaluation-v8"
+        record["format"] = "werkbank-evaluation-v9"
         (older / "evaluation.json").write_text(json.dumps(record, indent=2) + "\n")
         tampered = self.scratch / "tampered"
         shutil.copytree(self.f.evaluation, tampered)
@@ -1829,7 +2202,7 @@ class Flow(unittest.TestCase):
             "another build": ({"evaluation": other}, "werkbank compare"),
             "an earlier format": (
                 {"evaluation": older},
-                "another format than this build's werkbank-evaluation-v9; write it"
+                "another format than this build's werkbank-evaluation-v13; write it"
                 " again from its runs with werkbank compare",
             ),
             "a changed file": ({"evaluation": tampered}, "not valid"),
@@ -1886,7 +2259,7 @@ class Flow(unittest.TestCase):
     def test_a_trial_is_refused_before_any_contact(self):
         from werkbank_start.flow import TRIAL_CASES
 
-        self.assertEqual(len(TRIAL_CASES), 7)
+        self.assertEqual(len(TRIAL_CASES), 8)
         # A page marked as a trial, and an evaluation of exactly the trial's
         # cases whichever page it has; the trial's cases stand in as A06 here,
         # as the real ones include code cases.
@@ -2049,7 +2422,7 @@ class Flow(unittest.TestCase):
     def test_the_default_image_keeps_the_raw_data(self):
         with fake.serve() as (address, state):
             code, prompts, output = self.submit(
-                [*QUESTION_REPLIES, "y", "y"],
+                [*QUESTION_REPLIES, "y", "", "y"],
                 evaluation=self.f.default_image_evaluation,
                 sources=[self.f.default_image],
                 address=address,
@@ -2091,7 +2464,7 @@ class Flow(unittest.TestCase):
         endpoint = "http://127.0.0.1:43117/v1"
         with fake.serve() as (address, state):
             code, _, output = self.submit(
-                [*QUESTION_REPLIES, "y", "y"],
+                [*QUESTION_REPLIES, "y", "", "y"],
                 sources=[self.f.gold],
                 address=address,
                 endpoint=endpoint,

@@ -13,6 +13,7 @@ Supersedes lines (`FEATURES`)."""
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import cache
 from typing import Any
 
 # Beliefs that select another version of the title.
@@ -129,9 +130,10 @@ def pick(versions: list[Document], *rankings: tuple[str, Any]) -> list[Document]
     return left
 
 
+@cache
 def parse(prompt: str) -> tuple[list[tuple[str, str, str]], list[Document]]:
     """The questions as (ID, title, quantity) and the register's documents in
-    register order."""
+    register order. Callers read the result and never change it."""
     head, register = prompt.split("\n\nREGISTER\n\n", 1)
     register = register.split("\nExecution limits:", 1)[0]
     documents = []

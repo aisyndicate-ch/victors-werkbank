@@ -132,6 +132,18 @@ class FakeCheckout:
         self.checkout = base / "checkout"
         self.checkout.mkdir()
         shutil.copy2(SCRIPT, self.checkout / "install.sh")
+        # The files that tell a Lima VM or an OrbStack machine apart, here
+        # missing unless a test writes them.
+        self.hosts = base / "hosts"
+        self.mac_files = base / "mac"
+        script = (self.checkout / "install.sh").read_text(encoding="utf-8")
+        for line, path in (
+            ("HOSTS=/etc/hosts", self.hosts),
+            ("MAC_FILES=/mnt/mac", self.mac_files),
+        ):
+            assert script.count(f"\n{line}\n") == 1, line
+            script = script.replace(f"\n{line}\n", f"\n{line.split('=')[0]}={path}\n")
+        (self.checkout / "install.sh").write_text(script, encoding="utf-8")
         (self.checkout / "pyproject.toml").write_text("[project]\n")
         for lock in LOCKS:
             (self.checkout / lock).write_text(f"{lock} pins\n")
@@ -438,6 +450,87 @@ UV_URL = (
     f"uv-{MACHINE}-unknown-linux-gnu.tar.gz"
 )
 PROVIDED = f".werkbank-tools/python/cpython-3.12.15-linux-{MACHINE}-gnu/bin/python3.12"
+
+
+class MacAndLinuxVms(FakeCheckout, unittest.TestCase):
+    """On macOS itself the script stops; in a Lima VM or an OrbStack machine it
+    names the address of the computer that runs the VM."""
+
+    LIMA_HOSTS = "127.0.0.1\tlocalhost\n192.168.5.2\thost.lima.internal\n"
+
+    def test_macos_itself_stops_before_anything(self):
+        real = shutil.which("uname")
+        self.fake(
+            self.fakes / "uname",
+            "if sys.argv[1:] == ['-s']:\n"
+            "    print('Darwin')\n"
+            "    sys.exit(0)\n"
+            f"os.execv({real!r}, [{real!r}, *sys.argv[1:]])\n",
+        )
+        result, calls = self.run_script()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("this is macOS", result.stderr)
+        self.assertIn("Nothing was changed", result.stderr)
+        self.assertIn("docs/users/PLATFORMS.md#macos-experimental", result.stderr)
+        self.assertEqual(calls, [])
+        self.assertFalse((self.checkout / ".venv").exists())
+        result, calls = self.run_script("--check")
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (1, "", ""))
+        result, calls = self.run_script("--help")
+        self.assertEqual(result.returncode, 0)
+
+    def test_a_lima_vm_names_the_host_address(self):
+        self.hosts.write_text(self.LIMA_HOSTS)
+        result, calls = self.run_script("--skip-docker")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("this is a Lima VM", result.stdout)
+        self.assertIn("http://host.lima.internal:11434/v1", result.stdout)
+        self.assertNotIn("shared from the Mac", result.stdout)
+        self.assertNotIn("OrbStack", result.stdout)
+
+    def test_a_lima_vm_points_docker_problems_to_the_mac_route(self):
+        self.hosts.write_text(self.LIMA_HOSTS)
+        # A user outside the docker group, whatever groups this one has.
+        self.fake(
+            self.fakes / "id",
+            "print('tester' if sys.argv[1:] == ['-un'] else 'tester users')\n",
+        )
+        result, calls = self.run_script(FAKE_DOCKER="denied")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("limactl stop", result.stderr)
+        self.assertNotIn("WSL2", result.stderr)
+        (self.fakes / "docker").unlink()
+        result, calls = self.run_script()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(
+            "in this VM see docs/users/PLATFORMS.md#macos-experimental", result.stderr
+        )
+
+    def test_an_orbstack_machine_and_a_shared_checkout_are_named(self):
+        # The Mac's files hold the checkout, as under /mnt/mac in a machine.
+        self.mac_files = self.checkout.parent
+        script = (self.checkout / "install.sh").read_text(encoding="utf-8")
+        old = f"\nMAC_FILES={self.checkout.parent / 'mac'}\n"
+        self.assertEqual(script.count(old), 1)
+        script = script.replace(old, f"\nMAC_FILES={self.mac_files}\n")
+        (self.checkout / "install.sh").write_text(script, encoding="utf-8")
+        result, calls = self.run_script("--skip-docker")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("OrbStack machine", result.stdout)
+        self.assertIn("http://host.orb.internal:11434/v1", result.stdout)
+        self.assertIn("shared from the Mac", result.stdout)
+
+    def test_elsewhere_nothing_names_a_vm(self):
+        # A name in a comment or as part of a longer name is no Lima entry.
+        self.hosts.write_text(
+            "# host.lima.internal\n10.0.0.1 host.lima.internal.example\n"
+        )
+        result, calls = self.run_script("--skip-docker")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("note: this", result.stdout)
+        (self.fakes / "docker").unlink()
+        result, calls = self.run_script()
+        self.assertIn("under WSL2 see docs/users/PLATFORMS.md#wsl2", result.stderr)
 
 
 class ProvidedPython(FakeCheckout, unittest.TestCase):

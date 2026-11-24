@@ -8,7 +8,7 @@ installation needs the network and contacts no model.
 
 | What | Needed |
 |---|---|
-| Operating system | Linux, or Linux inside WSL2 on a Windows host ([platforms](users/PLATFORMS.md)). macOS and native Windows are not supported. |
+| Operating system | Linux, or Linux inside WSL2 on a Windows host ([platforms](users/PLATFORMS.md)). On a Mac, experimentally, inside a Linux VM ([macOS](users/PLATFORMS.md#macos-experimental)); `install.sh` stops on macOS itself. Native macOS and native Windows are not supported. |
 | Python | 3.12 or newer with its `venv` module. Without one, the installation offers to [provide Python](#python-on-demand) inside the folder. |
 | Docker | Docker Engine whose `docker` command works for your user, for example as a member of the `docker` group. |
 | Runtime image | Pulled by the installation: about 300 MB to download and 830 MiB unpacked ([Harbor runtime](#harbor-runtime-python-312-and-docker)). |

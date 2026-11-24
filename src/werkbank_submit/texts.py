@@ -1,10 +1,11 @@
 """The fixed texts of a submission: format identifiers, the questionnaire, the
-consent text, the prompts and the messages for each receiver answer, exactly
+consent texts, the prompts and the messages for each receiver answer, exactly
 as `docs/SUBMISSION.md` states them (a test holds the two together)."""
 
-SUBMISSION_FORMAT = "werkbank-submission-v1"
+SUBMISSION_FORMAT = "werkbank-submission-v2"
 QUESTIONS_FORMAT = "werkbank-questions-v1"
-CONSENT_FORMAT = "werkbank-consent-v2"
+CONSENT_FORMAT = "werkbank-consent-v3"
+LEADERBOARD_CONSENT_FORMAT = "werkbank-leaderboard-consent-v1"
 RECEIPT_FORMAT = "werkbank-receipt-v1"
 
 # (field, question, ((choice ID, label), ...)); every question can be skipped.
@@ -87,7 +88,8 @@ only as its last part and a hash.
 
 The maintainer uses submissions to improve Werkbank and its cases. A
 submission is your own report: it is never ranked and never published
-without your agreement. It is kept until you ask for deletion, at most
+unless you also answer yes to "Publish on the leaderboard?", which is
+asked only with raw data. It is kept until you ask for deletion, at most
 12 months after it arrives. To have every submission under your
 installation ID deleted, write to the maintainer at the contact shown
 above and quote the ID. A deleted submission is gone from the
@@ -98,7 +100,46 @@ stores it with your submission; its server logs keep it for at most
 7 days, only to limit abuse.
 """
 
+LEADERBOARD_CONSENT_TEXT = """\
+With raw data, the maintainer can also publish this result on the
+Werkbank leaderboard, if you agree.
+
+Published are only the values the leaderboard shows: the score with
+its interval, the rates per category, the security line, the censored
+attempts, the tasks solved per pass, the recorded setup (model,
+quantization, engine and version, hardware statement, hardware class
+and memory type, thinking setting, context, per-response cap, sampling
+and streaming), the Werkbank version, your display name and the date
+of the submission. Never published: the raw data and the installation
+ID.
+
+An entry is published only after the maintainer has regraded every run
+from its raw data and the regrade matches what you sent; otherwise the
+submission stays an ordinary one and nothing is published. A display
+name is optional; without one the entry shows "anonymous". A name that
+insults or impersonates someone is replaced by "anonymous".
+
+To withdraw, write to the deletion contact shown above and quote your
+installation ID: from the leaderboard alone, or everything, which also
+deletes your submissions. A withdrawal takes effect within 30 days. A
+published entry stays until you withdraw it, also after its submission
+and raw data are deleted at the end of their 12 months.
+"""
+
 INCLUDE_RAW = "Include raw data? [y/N] "
+PUBLISH = "Publish on the leaderboard? [y/N] "
+DISPLAY_NAME = "Display name (Enter for anonymous): "
+NAME_AGAIN = (
+    "Use 1 to 32 letters, digits, spaces, -, _ or ., starting and ending with a"
+    " letter or digit, or press Enter for anonymous."
+)
+NAME_PRIVATE = (
+    "The privacy check found {kind} in the name; choose another name, or press"
+    " Enter for anonymous."
+)
+ANONYMOUS = "anonymous"
+NO_RAW_NOT_PUBLISHED = "Leaderboard: not published, which needs raw data"
+NOT_RANKED = "Leaderboard: not published, which takes results of the Full set only"
 SEND_NOW = "Send now? [y/N] "
 WRITE_FILE = "Write the file? [y/N] "
 CHOICE = "Choice (1-{count}, Enter to skip): "

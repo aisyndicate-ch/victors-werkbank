@@ -19,7 +19,7 @@ and how to run it. These pages hold the detail.
 
 ## Reference
 
-- [Tasks](TASKS.md): the 40 tasks with their category, their difficulty and what
+- [Tasks](TASKS.md): the 57 tasks with their category, their difficulty and what
   each asks
 - [Methodology](METHODOLOGY.md): what is measured, how and why
 - [What results show and what they do not](users/LIMITS.md): read before you draw a

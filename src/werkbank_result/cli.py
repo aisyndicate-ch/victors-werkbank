@@ -52,10 +52,10 @@ def main(argv: list[str] | None = None) -> int:
         "--single-pass",
         action="store_true",
         help=(
-            "mark the page as a single pass of werkbank start's Quick, Normal or"
-            " Full:"
-            " the numbers stay, and werkbank submit refuses it; the evaluation"
-            " must be one pass; not with --trial"
+            "mark the page as a single pass of werkbank start's Quick, Normal,"
+            " Full or German: it has no core number, which needs three passes, and"
+            " werkbank submit refuses it; the evaluation must be one pass; not"
+            " with --trial"
         ),
     )
     args = parser.parse_args(argv)

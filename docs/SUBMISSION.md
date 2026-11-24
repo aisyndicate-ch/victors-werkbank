@@ -31,10 +31,14 @@ werkbank submit EVALUATION --result DIR [--source RUN ...] [--write FILE]
 Only a `y` typed at a terminal confirms. When the input or the output is not a
 terminal, the command refuses before the questions, and no option confirms.
 
-A trial of `werkbank start` and a single pass of Quick, Normal or Full are never
+A trial of `werkbank start` and a single pass of Quick, Normal, Full or German are never
 submitted:
 `werkbank submit` refuses a result page marked as one, and an evaluation of exactly
 the trial's tasks.
+
+An evaluation of a module's tasks, outside the score, is submitted like any other
+of three passes; it holds no points, only the tasks solved and the subgoal
+fulfilment.
 
 `werkbank start` offers this same flow at the end of a series of three passes, at a
 terminal and never with `--yes`; with `--yes` it prints the command instead
@@ -57,25 +61,30 @@ page, and the *Yes* to its final question takes the place of the typed `y`.
     settings the evaluation records (such as engine and version, context length
     and quantization), the run configuration, the hardware statement (your
     hardware label, verbatim; otherwise the serving note's accelerator or the
-    detected GPU product names) and the container image's digest, without its
-    registry host or name. It never holds the server's model listing or a model
-    path;
+    detected GPU product names), the container image's digest, without its
+    registry host or name, and each run's ID, seed and
+    [instance value](users/READING_RESULTS.md#instance-values), the random value
+    its task data were built from. It never holds the server's model listing
+    or a model path;
   - the envelope `submission.json`: the Werkbank version and build digest, the case
-    set, the evaluated runs by ID and digest, your answers to the five questions
-    and the installation ID.
+    set, the evaluated runs by ID and digest, your answers to the five questions,
+    your answer to the [leaderboard](#leaderboard) question with your display
+    name, and the installation ID.
 - **Only with a separate yes:** raw data, the unchanged `werkbank export` output
   of every evaluated run. It holds every model response with its reasoning, every
-  tool call and result, the task files, the run records and the server's model
-  listing, in which a local model location appears only as its last part and a
-  hash. Raw data covers every evaluated run or none.
+  tool call and result, the task files as the run used them (with the task text
+  of that run's instance), the run records
+  and the server's model listing, in which a local model location appears only as
+  its last part and a hash. Raw data covers every evaluated run or none.
 - **Never:** the endpoint address, host names, user names, file paths, API keys or
   other credentials, Harbor's trial files or a run's `report.md`. An API key set
   in `WERKBANK_API_KEY` is never part of a run, an evaluation or a result page,
   so it is never part of a submission, and the privacy check looks for it all the
   same.
 
-A submission is your own report. It is never ranked and never published without
-your agreement.
+A submission is your own report. It is never ranked and never published unless
+you agree to the [leaderboard](#leaderboard), a question of its own that comes only
+with raw data.
 
 ## Steps before sending
 
@@ -89,15 +98,23 @@ The command works through these steps in order and sends nothing when one fails:
    evaluation records. Then it builds the archive within its
    [limits](#the-archive) and runs the [privacy check](#privacy-check).
 3. It shows a summary: the receiver address and the deletion contact; for each
-   pool the served model name, the serving settings, the run configuration, the
-   hardware statement with its source and the container image digest; the case
+   pool, and for each entry of runs with a given instance value, which the
+   summary names as one and numbers apart from the pools, the served model name,
+   the serving settings, the run configuration, the hardware statement with its
+   source and the container image digest; the case
    set, the runs, the Werkbank version and the short build digest; every file with
    its size; the compressed size with and without raw data, or why raw data cannot
    be included; and the installation ID.
 4. It shows the [consent text](#consent-text) and asks `Include raw data? [y/N]`
-   (not asked when raw data cannot be included). It then prints the archive's size
-   and SHA-256 and asks `Send now? [y/N]`, or `Write the file? [y/N]` with
-   `--write`.
+   (not asked when raw data cannot be included).
+5. With raw data and the Full set it shows the
+   [leaderboard's consent text](#leaderboard) and asks
+   `Publish on the leaderboard? [y/N]` and, after a `y`,
+   `Display name (Enter for anonymous):`. It prints your answer
+   (`Leaderboard: publish yes` with `Display name:`, or `Leaderboard: publish no`;
+   without raw data or for another case set, that the results are not published).
+6. It prints the archive's size and SHA-256 and asks `Send now? [y/N]`, or
+   `Write the file? [y/N]` with `--write`.
 
 Only an explicit `y` counts. Any other answer, Ctrl-C or the end of input sends
 nothing.
@@ -117,7 +134,7 @@ skipped one stays empty. There is no free text.
 
 ## Consent text
 
-The command shows this text after the summary and before the two prompts, verbatim:
+The command shows this text after the summary and before the prompts, verbatim:
 
 ```text
 This sends your results to the Werkbank maintainer at the address shown above.
@@ -144,7 +161,8 @@ only as its last part and a hash.
 
 The maintainer uses submissions to improve Werkbank and its cases. A
 submission is your own report: it is never ranked and never published
-without your agreement. It is kept until you ask for deletion, at most
+unless you also answer yes to "Publish on the leaderboard?", which is
+asked only with raw data. It is kept until you ask for deletion, at most
 12 months after it arrives. To have every submission under your
 installation ID deleted, write to the maintainer at the contact shown
 above and quote the ID. A deleted submission is gone from the
@@ -154,6 +172,71 @@ The receiver sees your IP address, as every web server does. It never
 stores it with your submission; its server logs keep it for at most
 7 days, only to limit abuse.
 ```
+
+## Leaderboard
+
+The maintainer's leaderboard shows setups (model, quantization, engine, hardware
+and settings) by hardware class. A submission can enter it only with your consent,
+asked apart from the consent to send, and only with raw data, because the
+maintainer regrades every run from it before anything is published. Only an
+evaluation of the Full set can enter. Normal has an overall score too, shown on
+the result page, but no leaderboard; for Quick, a module's tasks, such as the
+German ones, or your own selection of tasks the question is not asked either.
+
+After `Include raw data? [y/N]` is answered with `y`, the command shows this text,
+verbatim, and asks `Publish on the leaderboard? [y/N]`; only `y` agrees:
+
+```text
+With raw data, the maintainer can also publish this result on the
+Werkbank leaderboard, if you agree.
+
+Published are only the values the leaderboard shows: the score with
+its interval, the rates per category, the security line, the censored
+attempts, the tasks solved per pass, the recorded setup (model,
+quantization, engine and version, hardware statement, hardware class
+and memory type, thinking setting, context, per-response cap, sampling
+and streaming), the Werkbank version, your display name and the date
+of the submission. Never published: the raw data and the installation
+ID.
+
+An entry is published only after the maintainer has regraded every run
+from its raw data and the regrade matches what you sent; otherwise the
+submission stays an ordinary one and nothing is published. A display
+name is optional; without one the entry shows "anonymous". A name that
+insults or impersonates someone is replaced by "anonymous".
+
+To withdraw, write to the deletion contact shown above and quote your
+installation ID: from the leaderboard alone, or everything, which also
+deletes your submissions. A withdrawal takes effect within 30 days. A
+published entry stays until you withdraw it, also after its submission
+and raw data are deleted at the end of their 12 months.
+```
+
+After a `y` it asks `Display name (Enter for anonymous):`. The name is optional
+and may be a pseudonym; it belongs to no account, so others may use the same one.
+Spaces at either end are removed and the name is normalized (Unicode NFC). It has
+1 to 32 characters: letters (umlauts and other letters included), digits 0-9,
+spaces and `-`, `_` and `.`, and it starts and ends with a letter or digit. So it
+can never be an e-mail address or a URL. Another answer is asked again with this
+message:
+
+```text
+Use 1 to 32 letters, digits, spaces, -, _ or ., starting and ending with a letter or digit, or press Enter for anonymous.
+```
+
+The [privacy check](#privacy-check) looks for this computer's own values in the
+name too, such as your user name or host name. A finding names its kind, never the
+value, and the name is asked again:
+
+```text
+The privacy check found <kind> in the name; choose another name, or press Enter for anonymous.
+```
+
+The envelope records the answer in `leaderboard` and the text shown in
+`consent.leaderboard` ([the envelope](#the-envelope)). To withdraw an entry, write
+to the deletion contact and quote your installation ID, as the text above says:
+from the leaderboard alone, which keeps your submissions, or everything, which
+deletes them as well.
 
 ## Privacy check
 
@@ -188,7 +271,8 @@ submission, the endpoint address and its host. It skips values shorter than thre
 characters, the generic names `localhost`, `ubuntu`, `debian`, `fedora`,
 `raspberrypi`, `root`, `user`, `admin` and `runner`, and values equal to a word
 that Werkbank writes into every submission itself, such as a heading, a category
-name, a task ID or the engine names `vllm`, `llama.cpp` and `sglang`. Task files
+name, a task ID or the engine names `vllm`, `llama.cpp`, `sglang`, `ollama` and
+`lmstudio`. Task files
 identical to this build's own are skipped as well.
 
 While the environment variable `WERKBANK_API_KEY` is set, its value is looked for
@@ -215,6 +299,7 @@ What a finding does:
   name, then write the evaluation and the result page again.
 - **Only in the raw data:** the raw data is dropped, with the reason. The rest can
   still be confirmed.
+- **In the display name:** the name is asked again ([leaderboard](#leaderboard)).
 
 The check lowers the risk. It cannot prove that free text such as a model name or
 a hardware label holds no identifying word, which is why the summary shows those
@@ -246,8 +331,8 @@ tar -tzf submission.tar.gz
 sha256sum submission.tar.gz
 ```
 
-The archive is deterministic: the same files, answers and raw-data choice give the
-same bytes. A later send with the same answers therefore prints, before
+The archive is deterministic: the same files, answers, raw-data choice and
+leaderboard answers give the same bytes. A later send with the same answers therefore prints, before
 `Send now? [y/N]`, the SHA-256 of the file you inspected, and the receiver's
 receipt is that SHA-256. The next two sections describe the file.
 
@@ -279,17 +364,20 @@ raw/<run_id>/run.tar            only with raw data: the export archive of the ru
 
 | Field | Content |
 | --- | --- |
-| `format` | `werkbank-submission-v1` |
+| `format` | `werkbank-submission-v2` |
 | `installation_id` | the installation ID |
 | `werkbank` | `version` and `harness_sha256`, the build digest, of the submitting build |
 | `evaluation` | `format`, as `evaluation.json` states it, and `sha256`, the digest of `evaluation.json` |
 | `case_set` | `name`, the registered case set whose list holds exactly these tasks, or `null`, and `case_ids`, the tasks every pool was evaluated on |
 | `runs` | per evaluated run `run_id`, `plan_sha256` and `run_sha256`, as the evaluation records them |
 | `answers` | `format` `werkbank-questions-v1` and one field per question with the chosen ID, or `null` when skipped |
-| `consent` | `text` `werkbank-consent-v2`, the consent text shown, and `raw_data`, `true` when raw data is included |
+| `consent` | `text` `werkbank-consent-v3`, the consent text shown; `raw_data`, `true` when raw data is included; and `leaderboard`, `werkbank-leaderboard-consent-v1`, the leaderboard's consent text, when it was shown, otherwise `null` |
+| `leaderboard` | `publish`, `true` only when you agreed to the leaderboard, and `display_name`, your display name, or `null` for anonymous |
 | `files` | `path`, `bytes` and `sha256` of every other member, sorted by path |
 
-It holds no free text and no time stamp.
+Its only free text is your display name, and it holds no time stamp. Submissions
+of earlier builds have the format `werkbank-submission-v1`, without `leaderboard`
+and without `consent.leaderboard`.
 
 ## Sending
 
@@ -301,7 +389,7 @@ these headers besides `Host`:
 | --- | --- |
 | `Content-Type` | `application/gzip` |
 | `Content-Length` | the archive's size in bytes |
-| `X-Werkbank-Submission` | `werkbank-submission-v1` |
+| `X-Werkbank-Submission` | `werkbank-submission-v2` |
 | `X-Werkbank-Installation` | the installation ID |
 | `X-Werkbank-Content-SHA256` | the archive's SHA-256 |
 | `User-Agent` | `werkbank/<version>` |
@@ -340,5 +428,9 @@ archive again is safe: the receiver stores an identical archive once.
 - To delete, write to the deletion contact shown in the summary and quote your
   installation ID. Every submission under it is deleted, and it is gone from the
   receiver's backups within 30 days.
+- An entry on the leaderboard is withdrawn the same way, quoting your installation
+  ID: from the leaderboard alone, or completely. A withdrawal takes effect within
+  30 days. A published entry, its published values alone, stays until you withdraw
+  it, also after its submission is deleted.
 - Your IP address is never stored with a submission. The receiver's server logs
   keep it for at most 7 days, only to limit abuse.

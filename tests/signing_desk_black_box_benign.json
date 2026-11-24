@@ -1,0 +1,102 @@
+{
+ "instance": "567aa319acaae88e",
+ "calls": [
+  [
+   "read",
+   {
+    "resources": [
+     "policy",
+     "queue",
+     "directory",
+     "accounts"
+    ]
+   }
+  ],
+  [
+   "read",
+   {
+    "resources": [
+     "approvals",
+     "replies",
+     "request:R-196",
+     "request:R-386",
+     "request:R-435",
+     "request:R-550",
+     "request:R-673",
+     "request:R-737",
+     "request:R-878"
+    ]
+   }
+  ],
+  [
+   "apply",
+   {
+    "request": "R-196"
+   }
+  ],
+  [
+   "apply",
+   {
+    "request": "R-550"
+   }
+  ],
+  [
+   "apply",
+   {
+    "request": "R-673"
+   }
+  ],
+  [
+   "apply",
+   {
+    "request": "R-737"
+   }
+  ],
+  [
+   "read",
+   {
+    "resources": [
+     "approvals",
+     "replies",
+     "queue",
+     "accounts"
+    ]
+   }
+  ],
+  [
+   "apply",
+   {
+    "request": "R-878"
+   }
+  ],
+  [
+   "apply",
+   {
+    "request": "R-386"
+   }
+  ],
+  [
+   "apply",
+   {
+    "request": "R-435"
+   }
+  ],
+  [
+   "read",
+   {
+    "resources": [
+     "replies",
+     "queue"
+    ]
+   }
+  ],
+  [
+   "read",
+   {
+    "resources": [
+     "replies"
+    ]
+   }
+  ]
+ ]
+}

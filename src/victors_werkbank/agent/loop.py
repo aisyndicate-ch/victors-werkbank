@@ -42,6 +42,18 @@ TOOL_LIMITS = '\nExecution limits: at most 4 tool calls per response are execute
 PUBLIC_TEST_LIMITS = (
     " Public-test stdout/stderr feedback is truncated to 1 KiB each with flags."
 )
+# The same texts in German, for the cases of the German module, whose
+# prompts, documents and tools are German (`registry.CaseContract.language`).
+NO_TOOL_LIMITS_DE = "\nAusführungsgrenzen: keine Werkzeugaufrufe."
+TOOL_LIMITS_DE = '\nAusführungsgrenzen: Von jeder Antwort werden höchstens 4 Werkzeugaufrufe ausgeführt, nacheinander in der aufgeführten Reihenfolge. Weitere Aufrufe werden nicht ausgeführt und ergeben den Werkzeugfehler "tool_call_limit_exceeded".'
+PUBLIC_TEST_LIMITS_DE = (
+    " Die Ausgaben der öffentlichen Tests auf stdout und stderr werden auf je"
+    " 1 KiB gekürzt und gekennzeichnet."
+)
+LIMITS = {
+    "en": (NO_TOOL_LIMITS, TOOL_LIMITS, PUBLIC_TEST_LIMITS),
+    "de": (NO_TOOL_LIMITS_DE, TOOL_LIMITS_DE, PUBLIC_TEST_LIMITS_DE),
+}
 # Calls executed per response; later calls in it get `refuse_tool_call`.
 TOOL_CALLS_PER_RESPONSE = 4
 # Responses in a row without a new observation (`Progress`) after which the
@@ -65,10 +77,15 @@ INTERFACE_ERRORS = frozenset(
 )
 # Per-event allowance charged against the case quota on top of payload bytes.
 EVENT_OVERHEAD_BYTES = 1024
-# Lifecycle records are never replaced by an omission marker.
+# Lifecycle records are never replaced by an omission marker and never charged
+# against the case quota; a scripted user's turn is one, as its text is fixed by
+# the case (`USER_SCRIPT_BYTES`) and its next request carries it charged.
 LIFECYCLE_KINDS = frozenset(
-    {"case_start", "case_end", "submission", "verification", "agent_end"}
+    {"case_start", "case_end", "submission", "verification", "agent_end", "user_turn"}
 )
+# Bytes of all `user_turn` payloads of a scripted user together, as the
+# journal encodes them; the case journal's reserve holds them.
+USER_SCRIPT_BYTES = 64 * 1024
 # Every exception the loop classifies into a status; anything else propagates.
 CLASSIFIED = (
     SnapshotWriteError,
@@ -98,14 +115,24 @@ class Endpoint(Protocol):
 
 
 def render_prompt(
-    prompt: str, tools: list[dict[str, Any]], public_test_notice: bool = False
+    prompt: str,
+    tools: list[dict[str, Any]],
+    public_test_notice: bool = False,
+    language: str = "en",
 ) -> str:
-    """Task prompt plus the execution-limit notice for its tool mode; the
-    public-test sentence only where the episode names public-test feedback."""
+    """Task prompt plus the execution-limit notice for its tool mode in the
+    case's `language` (`LIMITS`); the public-test sentence only where the
+    episode names public-test feedback. KeyError for another language."""
+    no_tools, with_tools, public_tests = LIMITS[language]
     if not tools:
-        return prompt + NO_TOOL_LIMITS
-    notice = PUBLIC_TEST_LIMITS if public_test_notice else ""
-    return prompt + TOOL_LIMITS + notice
+        return prompt + no_tools
+    notice = public_tests if public_test_notice else ""
+    return prompt + with_tools + notice
+
+
+def user_message(content: str) -> dict[str, Any]:
+    """A scripted user's later message as the request history holds it."""
+    return {"role": "user", "content": content}
 
 
 def json_bytes(value: Any) -> bytes:
@@ -305,6 +332,11 @@ class Progress:
         self.stalled = 0 if new else self.stalled + 1
         return self.stopped
 
+    def user_turn(self) -> None:
+        """A delivered user message is new information: the streak ends, and
+        the observations seen so far stay seen."""
+        self.stalled = 0
+
     def _accepted(
         self, episode: Episode, call: ToolCall, position: int, result: Any
     ) -> dict[str, Any] | None:
@@ -346,12 +378,24 @@ def run_agent(
     `streaming` is the run's mode (the endpoint streams); only then does a
     request record the endpoint's first-token moment. `cached_tokens` adds
     the reported cached prompt tokens to each request record.
+
+    A response without tool calls ends the agent phase once the episode's
+    scripted user has nothing more to say (`Episode.user_messages`); before
+    that, the next message waits for the next iteration: the case keeps its
+    state for the turn (`Episode.begin_turn`), before the checks of the
+    iteration, and the message is delivered only where the loop then sends a
+    request (no stop rule fires with it in the history): the `user_turn` event
+    records its number and text, and the request carries it. A delivered
+    message is no response of the turn limit.
     """
     messages: list[dict[str, Any]] = [
         {
             "role": "user",
             "content": render_prompt(
-                episode.prompt, episode.tools, episode.public_test_notice
+                episode.prompt,
+                episode.tools,
+                episode.public_test_notice,
+                episode.language,
             ),
         }
     ]
@@ -359,9 +403,18 @@ def run_agent(
     finished = False
     logged_messages = 0
     progress = Progress(episode.tools)
+    script = episode.user_messages
+    # The user messages delivered so far (the prompt is the first) and the
+    # next one, while it waits for the loop's next request.
+    delivered = 1
+    pending: str | None = None
     for _ in range(turns):
         if sink.exhausted:
             break
+        if pending is not None:
+            # Before the checks, so that none of the case's time passes after
+            # them.
+            episode.begin_turn(delivered + 1)
         remaining = agent_deadline - time.monotonic()
         if remaining <= 0:
             state.status, state.reason = "timeout", "agent_deadline"
@@ -369,9 +422,16 @@ def run_agent(
         if state.used >= cap:
             state.status, state.reason = "output_limit", "token_budget"
             break
-        if len(json_bytes(messages)) > history_bytes:
+        upcoming = messages if pending is None else [*messages, user_message(pending)]
+        if len(json_bytes(upcoming)) > history_bytes:
             state.status, state.reason = "output_limit", "context_byte_budget"
             break
+        if pending is not None:
+            delivered += 1
+            sink.event("user_turn", {"turn": delivered, "content": pending})
+            messages.append(user_message(pending))
+            progress.user_turn()
+            pending = None
         request_cap = min(cap - state.used, max_tokens_per_call)
         sink.event(
             "model_request",
@@ -441,6 +501,9 @@ def run_agent(
             state.status, state.reason = "failed", "endpoint_refusal"
             break
         messages.append(reply.raw["choices"][0]["message"])
+        if not reply.tool_calls and delivered <= len(script):
+            pending = script[delivered - 1]
+            continue
         if not reply.tool_calls:
             if episode.final_answer:
                 episode.submit_final(reply.content)

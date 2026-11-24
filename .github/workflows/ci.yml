@@ -1,13 +1,20 @@
 name: Repository CI
+# Every pull request that is ready, every push to `main` and once a week, so
+# that a change outside the repository (runner image, package index, pinned
+# images) shows up even when nothing merges.
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 3 * * 1"
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
   group: repo-ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   installation:
     # The tree installs, starts and builds as its installation page says, and
@@ -52,15 +59,25 @@ jobs:
       - name: Run the test suite
         # Without Docker: the tests that run cases in containers skip here and
         # run in the two jobs below.
-        run: .venv/bin/python -m unittest discover -s tests
+        run: .venv/bin/python -m unittest discover -s tests -v
       - name: Build distributions
         run: .venv/bin/python -m build --no-isolation
+      - name: Check the release archive
+        # The sdist is the release archive: unpacked, ./werkbank installs and
+        # starts from it, so it must hold the launcher, the installation script,
+        # the lock files and the sources, both scripts executable.
+        run: |
+          WERKBANK_SDIST="$(echo dist/*.tar.gz)" PYTHONPATH=src:tests \
+            .venv/bin/python -m unittest test_launcher.ReleaseArchive -v
       - name: Verify clean wheel installation
+        # The wheel alone, without Harbor, installs, starts and runs the
+        # command-line tests.
         run: |
           python3 -m venv "$RUNNER_TEMP/werkbank-wheel"
           "$RUNNER_TEMP/werkbank-wheel/bin/python" -m pip install --no-index --no-deps dist/*.whl
           "$RUNNER_TEMP/werkbank-wheel/bin/werkbank" doctor --offline
           "$RUNNER_TEMP/werkbank-wheel/bin/werkbank-ui" --help
+          PYTHONPATH="$GITHUB_WORKSPACE/tests" "$RUNNER_TEMP/werkbank-wheel/bin/python" -m unittest test_cli -v
       - name: Check patch whitespace
         run: git show --format= --check HEAD
   harbor-integration:
@@ -97,6 +114,16 @@ jobs:
           WERKBANK_HARBOR_DOCKER: "1"
           WERKBANK_HARBOR_EVIDENCE: ${{ runner.temp }}/werkbank-harbor-adapter
         run: .venv/bin/python -m unittest discover -s tests -p test_harbor_adapter.py -k adapter.TrialsWithDocker -v
+      - name: Preserve failed integration evidence
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: harbor-integration-failure
+          path: |
+            ${{ runner.temp }}/werkbank-harbor-smoke
+            ${{ runner.temp }}/werkbank-harbor-adapter
+          if-no-files-found: ignore
+          retention-days: 7
   harbor-code:
     # Code cases as Harbor trials, and their controls in the container executor.
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
@@ -131,6 +158,14 @@ jobs:
         env:
           WERKBANK_HARBOR_DOCKER: "1"
         run: .venv/bin/python -m unittest discover -s tests -p test_container_controls.py -v
+      - name: Preserve failed integration evidence
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: harbor-code-failure
+          path: ${{ runner.temp }}/werkbank-harbor-code
+          if-no-files-found: ignore
+          retention-days: 7
   repository-checks:
     if: always()
     needs: [installation, harbor-integration, harbor-code]

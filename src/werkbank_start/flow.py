@@ -16,6 +16,7 @@ command line, printed command or file.
 
 import json
 import os
+import re
 import shlex
 import time
 from collections.abc import Callable
@@ -28,11 +29,13 @@ from victors_werkbank.agent.measurements import TEMPLATE_KWARGS
 from victors_werkbank.agent.model_process import IsolatedEndpoint
 from victors_werkbank.agent.transport import API_KEY_VARIABLE, EndpointError
 from victors_werkbank.registry import (
-    CASE_SETS,
     CASES,
     MIN_TOKENS_PER_CALL,
+    case_sets,
     context_need,
     context_recommendation,
+    module_of,
+    scored_sets,
 )
 from victors_werkbank.serving import NOT_LOOPBACK, PROBE_SECONDS
 from victors_werkbank.thinking import RecipeError, resolve
@@ -46,27 +49,37 @@ FAILED = 2
 UNMEASURED = 3
 
 SEEDS = (1, 2, 3)
-# The trial: one pass over seven easy anchors, one per category, in registry
+# The trial: one pass over eight easy anchors, one per category, in registry
 # order. It checks the installation, the agent loop, the containers and the
 # result page; it has no score, compares with nothing and is never submitted.
 # The list lives here, outside the harness digest, and is no case set.
 TRIAL_SEEDS = (1,)
-TRIAL_CASES = ("M04", "S06", "DA05", "R03", "A15", "C01", "L01")
+TRIAL_CASES = ("M04", "S06", "DA05", "R03", "A15", "L01", "C11", "MT01")
 TRIAL_TEXT = (
     "A quick check that the installation, the agent loop, the containers and"
     " the result page work, a few minutes; no benchmark: no score, not"
     " comparable and never submitted"
 )
 # The benchmark modes, each one case set. Quick is a first picture, Normal the
-# standard run and Full the one with the very hard tasks; Normal and Full have
-# an overall score over their own tasks, Quick has none.
-QUICK_TEXT = (
-    "The easy and medium tasks that a 64K context can run, a first picture; no"
-    " overall score"
+# standard run and Full the one with the hardest tasks; a mode whose set is a
+# scored one (`registry.scored_sets`) has an overall score over its own tasks,
+# any other benchmark mode none, so the line follows the shipped lists; a
+# module's mode says in its own words that it stands outside the score.
+QUICK_TEXT = "A quick check on tasks that a 64K context can run, a first picture"
+NORMAL_TEXT = "Every task but the hardest ones"
+FULL_TEXT = "Every task, the hardest included"
+SCORED_TEXT = "an overall score over these tasks"
+UNSCORED_TEXT = "no overall score"
+# The German module: its own case set outside the score, offered after the
+# benchmark modes. Three passes or one, like them,
+# and three passes are offered for submission; its page shows the tasks
+# solved per pass and the subgoal fulfilment, never points.
+GERMAN_SET = "deutsch-v1"
+GERMAN_TEXT = (
+    "Tasks on German documents outside the score: the tasks solved per pass"
+    " and the subgoal fulfilment, no points"
 )
-NORMAL_TEXT = "Every task that is not very hard; an overall score over these tasks"
-FULL_TEXT = "Every task, the very hard ones included; an overall score over all tasks"
-# Quick, Normal and Full run three passes, or on request one: a first look in
+# Every mode but the trial runs three passes, or on request one: a first look in
 # about a third of the time that is never submitted, as results to send hold
 # the three passes.
 SINGLE_SEEDS = (1,)
@@ -74,12 +87,19 @@ PASSES_QUESTION = "Three passes or one?"
 PASSES_TEXTS = (
     "Three passes with seeds 1, 2 and 3: a result to compare, with the range"
     " of the passes, that can be submitted",
-    "One pass with seed 1: about a third of the time; without temperature 0"
-    " it has no score, and it is never submitted",
+    "One pass with seed 1: about a third of the time; it has no score, which"
+    " needs three passes, and it is never submitted",
+)
+# Every pass is a `werkbank run` without an instance value of its own, so
+# each draws one, and so does a repeated pass: a given value would keep the
+# pass out of the pool.
+DRAWN_DATA = (
+    "Each pass gets newly drawn data for every task; a repeated pass draws new"
+    " data too."
 )
 SINGLE_SUMMARY = (
     "This was one pass: it is never submitted. For results to send, start"
-    " Quick, Normal or Full with three passes."
+    " Quick, Normal, Full or German with three passes."
 )
 # The largest per-response cap a run accepts. The passes use it where the
 # server's context covers the chosen mode with it, so a long response is not cut
@@ -139,6 +159,23 @@ WSL_NOTE = (
 )
 # The kernel release WSL2 names itself in ("...-microsoft-standard-WSL2").
 OSRELEASE = Path("/proc/sys/kernel/osrelease")
+LIMA_NOTE = (
+    "In a Lima VM (Lima or Colima), a server on the computer that runs it is"
+    " reached as host.lima.internal, not 127.0.0.1: for example"
+    " http://host.lima.internal:11434/v1 for Ollama on its usual port."
+)
+ORBSTACK_NOTE = (
+    "In an OrbStack machine, a server on the Mac is reached as host.orb.internal,"
+    " not 127.0.0.1: for example http://host.orb.internal:11434/v1 for Ollama on"
+    " its usual port."
+)
+# Lima, and Colima built on it, write "<address> host.lima.internal" into the
+# guest's hosts file at every boot; an OrbStack machine shows the Mac's files
+# at /mnt/mac. Both are only read, and never more than HOSTS_BYTES of the file.
+HOSTS = Path("/etc/hosts")
+HOSTS_BYTES = 65536
+LIMA_LINE = re.compile(r"[0-9A-Fa-f.:]+[ \t]+host\.lima\.internal(?:[ \t]|$)")
+MAC_FILES = Path("/mnt/mac")
 PATH_HINT = (
     "{count} listed model{s} named by a file or its path cannot be chosen:"
     " serve the model under a name (llama.cpp: --alias NAME; vLLM:"
@@ -188,23 +225,27 @@ class Mode:
 
     def scope(self) -> str:
         count = len(self.case_ids)
+        what = f"{count} case{'s' if count != 1 else ''}"
         if self.case_set is not None:
-            what = f"case set {self.case_set}, {count} cases"
-        else:
-            what = f"{count} case{'s' if count != 1 else ''}"
+            what = f"case set {self.case_set}, {what}"
         episodes = self.episodes()
         return f"{what} ({episodes} episode{'s' if episodes != 1 else ''})"
 
 
 def _benchmark(name: str, title: str, case_set: str, about: str) -> Mode:
-    return Mode(name, title, CASE_SETS[case_set], case_set, ("--set", case_set), about)
+    case_ids = case_sets()[case_set]
+    if module_of(case_ids) is None:
+        score = SCORED_TEXT if case_set in scored_sets() else UNSCORED_TEXT
+        about = f"{about}; {score}"
+    return Mode(name, title, case_ids, case_set, ("--set", case_set), about)
 
 
 def modes() -> dict[str, Mode]:
     return {
-        "quick": _benchmark("quick", "Quick", "quick-v3", QUICK_TEXT),
-        "normal": _benchmark("normal", "Normal", "normal-v1", NORMAL_TEXT),
-        "full": _benchmark("full", "Full", "full-v1", FULL_TEXT),
+        "quick": _benchmark("quick", "Quick", "quick-v5", QUICK_TEXT),
+        "normal": _benchmark("normal", "Normal", "normal-v3", NORMAL_TEXT),
+        "full": _benchmark("full", "Full", "full-v2", FULL_TEXT),
+        "german": _benchmark("german", "German", GERMAN_SET, GERMAN_TEXT),
         "trial": Mode(
             "trial",
             "Trial",
@@ -310,6 +351,8 @@ class Boundaries:
     runs: Path = Path("runs")
     modes: dict[str, Mode] = field(default_factory=modes)
     osrelease: Path = OSRELEASE
+    hosts: Path = HOSTS
+    mac_files: Path = MAC_FILES
 
 
 class Refused(Exception):
@@ -445,6 +488,8 @@ class Series:
     sources: list[Path] = field(default_factory=list)
 
     def run_argv(self, seed: int, output: Path) -> list[str]:
+        """The command line of pass `seed`. It never holds `--instance`: the
+        run draws its own instance value, as a repeat of the pass does."""
         return [
             "run",
             "--endpoint",
@@ -554,14 +599,32 @@ def _typed_endpoint(console: Console) -> str:
     raise Stopped
 
 
-def _wsl_hint(env: Boundaries) -> str:
-    """The WSL2 note, with a leading space, when this Linux runs under WSL2;
-    else nothing. It reads one local file and sends no request."""
+def _lima(hosts: Path) -> bool:
+    """Whether the hosts file names host.lima.internal as Lima writes it."""
+    try:
+        with hosts.open("rb") as file:
+            text = file.read(HOSTS_BYTES).decode("utf-8", errors="replace")
+    except OSError:
+        return False
+    return any(LIMA_LINE.match(line) for line in text.splitlines())
+
+
+def _host_hint(env: Boundaries) -> str:
+    """Where a server outside this Linux is found, with a leading space: the
+    WSL2 note under WSL2, the Lima note in a Lima VM, the OrbStack note in an
+    OrbStack machine; else nothing. It reads local files only and sends no
+    request."""
     try:
         release = env.osrelease.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return ""
-    return f" {WSL_NOTE}" if "microsoft" in release.lower() else ""
+        release = ""
+    if "microsoft" in release.lower():
+        return f" {WSL_NOTE}"
+    if _lima(env.hosts):
+        return f" {LIMA_NOTE}"
+    if env.mac_files.is_dir():
+        return f" {ORBSTACK_NOTE}"
+    return ""
 
 
 def _server(
@@ -605,9 +668,9 @@ def _server(
     if options.yes:
         raise Refused(
             "No server answered on the usual ports. Pass its base URL with"
-            f" --endpoint URL.{_wsl_hint(env)}"
+            f" --endpoint URL.{_host_hint(env)}"
         )
-    console.say(f"No server answered on the usual ports.{_wsl_hint(env)}")
+    console.say(f"No server answered on the usual ports.{_host_hint(env)}")
     return _typed_endpoint(console), None
 
 
@@ -1263,6 +1326,7 @@ def _start(options: Options, env: Boundaries, console: Console) -> int:
     )
     console.step("series", folder=folder, mode=mode)
     console.say(f"Series folder: {folder}")
+    console.say(DRAWN_DATA)
     stopped = _passes(series, env, console, child_environment(api_key))
     if stopped is not None:
         return stopped

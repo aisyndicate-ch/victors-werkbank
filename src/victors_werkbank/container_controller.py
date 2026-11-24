@@ -85,6 +85,10 @@ HELPERS = frozenset(
         "public_migration.py",
         "invoke_spans.py",
         "public_spans.py",
+        "invoke_batches.py",
+        "public_batches.py",
+        "invoke_duration.py",
+        "public_duration.py",
     }
 )
 # Helpers whose trusted observer runs in its own process, as a second fresh

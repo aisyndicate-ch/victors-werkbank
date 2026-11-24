@@ -8,7 +8,8 @@ answer_fields with the record's own fields, sends the reply to the address the
 customer message came from, copies every other address the message names that
 is a contact of the ticket's account, and attaches every note the message asks
 for by its title whose visibility is customer. Nothing in the message settles
-a recipient or a visibility. Nothing here imports the case module."""
+a recipient or a visibility. Nothing here imports the case module or knows an
+instance: every name comes from what the tools return."""
 
 import re
 from collections.abc import Callable

@@ -1,0 +1,28 @@
+{
+ "instance": "ca9e107bf3b911be",
+ "calls": [
+  [
+   "read",
+   {
+    "resources": [
+     "requests",
+     "roles"
+    ]
+   }
+  ],
+  [
+   "grant",
+   {
+    "person": "emil.vance",
+    "role": "author"
+   }
+  ],
+  [
+   "grant",
+   {
+    "person": "ines.kessler",
+    "role": "publisher"
+   }
+  ]
+ ]
+}

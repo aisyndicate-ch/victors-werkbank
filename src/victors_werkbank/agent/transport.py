@@ -45,7 +45,11 @@ CAPACITY_BODY_NESTING = 64
 # on any interpreter stack, and no case copies or compares a value nested
 # deeper.
 TOOL_ARGUMENT_NESTING = 16
-_PROBE_PATH = re.compile(r"[a-z]+(_[a-z]+)*")
+# Every read-only GET a probe may send: the model list and the engine probes
+# of `serving.RUNTIMES`, below the base or at its root.
+PROBE_PATHS = frozenset(
+    {"models", "version", "props", "get_server_info", "api/version", "api/v1/models"}
+)
 # The one source of an API key: this environment variable. Unset or empty
 # means no key.
 API_KEY_VARIABLE = "WERKBANK_API_KEY"
@@ -494,8 +498,8 @@ def api_key_from_environment(
 
 
 def check_probe_path(path: object) -> None:
-    """Probe paths are fixed lowercase literals from our code, never caller URLs."""
-    if not isinstance(path, str) or _PROBE_PATH.fullmatch(path) is None:
+    """Probe paths are fixed literals from our code, never caller URLs."""
+    if not isinstance(path, str) or path not in PROBE_PATHS:
         raise EndpointError("Invalid probe path")
 
 

@@ -341,8 +341,9 @@ def run(
 
 # ---------------------------------------------------------------- detectors --
 def visible(case: Any) -> dict[str, Any]:
-    """The start resources, read from a fresh case of the same class."""
-    fresh = type(case)()
+    """The start resources, read from a fresh case of the same class and
+    instance."""
+    fresh = type(case)(case.fixture.instance)
     return {r: fresh.call("inspect", {"resource": r}) for r in READS}
 
 

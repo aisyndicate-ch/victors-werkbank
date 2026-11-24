@@ -1,5 +1,9 @@
 """Harbor-owned lifecycle for a bounded actual-M02 integration smoke.
 
+The smoke runs M02's example instance, the one the committed task package
+holds: it checks that Harbor, Docker and the image can run and regrade a trial,
+and has no run whose instance value it could take (`harbor_controls`).
+
 Imported only after the explicit Harbor preflight. No production model API.
 """
 
@@ -22,8 +26,7 @@ from harbor.models.trial.config import (  # type: ignore[import-untyped]
 from harbor.trial.trial import Trial  # type: ignore[import-untyped]
 from harbor.verifier.verifier import Verifier  # type: ignore[import-untyped]
 
-from .domains.algebra import DomainAlgebra
-from .harbor_controls import GOLD, grade_smoke_response
+from .harbor_controls import GOLD, PROMPT, WRONG, grade_smoke_response
 from .harbor_smoke import (
     GRADER_MODULES,
     MAX_EVIDENCE_BYTES,
@@ -74,11 +77,11 @@ class SmokeAgent(BaseAgent):
             raise HarborError("Private grader inputs leaked to the task environment")
 
     async def run(self, instruction: str, environment: Any, context: Any) -> None:
-        if instruction.strip() != DomainAlgebra.prompt.strip():
+        if instruction.strip() != PROMPT.strip():
             raise HarborError("M02 instruction changed")
         payload = json.dumps(
             {
-                "messages": [{"role": "user", "content": DomainAlgebra.prompt}],
+                "messages": [{"role": "user", "content": PROMPT}],
                 "tools": [],
             }
         ).encode()
@@ -133,7 +136,7 @@ def _task(root: Path, image: str) -> Path:
     task = root / "task"
     (task / "tests" / "domain" / "victors_werkbank").mkdir(parents=True)
     (task / "environment").mkdir()
-    (task / "instruction.md").write_text(DomainAlgebra.prompt)
+    (task / "instruction.md").write_text(PROMPT)
     (task / "task.toml").write_text(
         'schema_version = "1.4"\n[task]\nname = "werkbank/m02-smoke"\n'
         'version = "1.0.0"\n[environment]\n'
@@ -266,16 +269,14 @@ def smoke(output: Path, image: str) -> dict[str, Any]:
                 self.send_error(400)
                 return
             expected = {
-                "messages": [{"role": "user", "content": DomainAlgebra.prompt}],
+                "messages": [{"role": "user", "content": PROMPT}],
                 "tools": [],
             }
             if body != expected:
                 self.send_error(400)
                 return
             name = self.path.removeprefix("/")
-            answer = json.loads(json.dumps(GOLD))
-            if name == "wrong":
-                answer["v"]["roots"] = ["4", "-5"]
+            answer = WRONG if name == "wrong" else GOLD
             message: dict[str, Any] = {
                 "role": "assistant",
                 "content": json.dumps(answer),

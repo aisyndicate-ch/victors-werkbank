@@ -2,7 +2,7 @@
 
 Offline and standard library only, so a wheel without Harbor or `jsonschema`
 validates. Every evaluation is checked for its format and partial-credit
-method, the shape schema 9.0.0 describes (`SHAPE` mirrors `schemas/evaluation.schema.json`; tests
+method, the shape schema 10.0.0 describes (`SHAPE` mirrors `schemas/evaluation.schema.json`; tests
 hold the two together), exactly its files with their digests, and internal
 consistency. Only the build that wrote it (`evaluator.harness_sha256`,
 with the same measured context needs and weight profiles, which lie outside
@@ -21,7 +21,13 @@ from typing import Any
 
 from ..agent.episode import harness_digest
 from ..agent.loop import NO_PROGRESS_RESPONSES
-from ..agent.measurements import IDENTITY_SAMPLING_KEYS, validate_sampling
+from ..agent.measurements import (
+    IDENTITY_SAMPLING_KEYS,
+    MIN_REPETITIONS,
+    validate_sampling,
+)
+from ..core_profile import design_profile_sha256
+from ..domains.variants import VALUE
 from ..grading.evidence import (
     EvidenceError,
     canonical,
@@ -30,7 +36,7 @@ from ..grading.evidence import (
     sha256,
     strict_record,
 )
-from ..registry import planned_counts, scored_set
+from ..registry import module_of, planned_counts, scored_set
 from . import comparison, partial, weights
 from .evaluation import (
     BUDGET_POINTS,
@@ -40,6 +46,7 @@ from .evaluation import (
     PROTOCOL_CLASSES,
     UNEVALUATED,
     below_recommendation,
+    case_sets_sha256,
     context_needs_sha256,
     evaluate,
     input_digests,
@@ -61,6 +68,7 @@ _PATTERNS = {
     "image": re.compile(r"sha256:[0-9a-f]{64}"),
     "outcome": re.compile(r"[a-z_]+/[A-Za-z0-9_]+"),
     "tool": re.compile(r"[A-Za-z0-9_-]{1,64}"),
+    "instance": VALUE,
 }
 
 
@@ -110,8 +118,11 @@ SCALARS: dict[str, Any] = {
     "image": _pattern("image"),
     "outcome": _pattern("outcome"),
     "tool": _pattern("tool"),
+    "instance": _pattern("instance"),
 }
-CATEGORIES = (
+# The weighted categories, then the modules: categories without weight
+# whose pools stand outside every score.
+WEIGHTED = (
     "agentic",
     "security",
     "math",
@@ -119,7 +130,10 @@ CATEGORIES = (
     "retrieval",
     "reliability",
     "data",
+    "multi-turn",
 )
+MODULES = ("german",)
+CATEGORIES = WEIGHTED + MODULES
 STATUSES = (
     "passed",
     "failed",
@@ -132,6 +146,7 @@ STATUSES = (
 FLAGS = (
     "invalid_result",
     "too_few_repetitions",
+    "given_instance",
     "below_recommendation",
 )
 
@@ -230,8 +245,8 @@ PARTIAL = {
         }
     ),
     "overall": {
-        "lower": "points",
-        "upper": "points",
+        "lower": null("points"),
+        "upper": null("points"),
         "score": null("points"),
         "fulfilment": null("share"),
     },
@@ -267,9 +282,11 @@ POOL = {
     "image": "image",
     "runs": unique("run", 1),
     "seeds": items(null("count")),
+    "instances": items("instance", 1),
     "repetitions": "positive",
     "case_ids": unique("case", 1),
     "case_set": null("set"),
+    "module": null(enum(*MODULES)),
     "flags": unique(enum(*FLAGS)),
     "recommendation": {
         "max_tokens_per_call": "positive",
@@ -363,13 +380,51 @@ POOL = {
         }
     ),
 }
-CATEGORY_OR_OVERALL = enum(*CATEGORIES, "overall")
+# A module's pool is never ranked or placed: rankings and the Pareto view
+# name weighted categories alone.
+CATEGORY_OR_OVERALL = enum(*WEIGHTED, "overall")
+# What `comparison.paired` gives a pair and a difference.
+PAIRED = {
+    "categories": per_category(
+        {
+            "families": "positive",
+            "paired_families": "count",
+            "unpaired_families": "count",
+            "delta": null("difference"),
+            "interval": INTERVAL,
+            "share_above_zero": null("share"),
+            "first_better": "count",
+            "second_better": "count",
+            "ties": "count",
+            "first_censored": "count",
+            "second_censored": "count",
+            "cases": items(
+                {
+                    "case_id": "case",
+                    "first_rate": "share",
+                    "second_rate": "share",
+                    "difference": "difference",
+                }
+            ),
+        }
+    ),
+    "overall": {
+        "complete": "bool",
+        "points": null("points_difference"),
+        "interval": INTERVAL,
+        "share_above_zero": null("share"),
+        "first_better": "count",
+        "second_better": "count",
+        "ties": "count",
+    },
+}
 SHAPE = {
     "format": ("const", EVALUATION_FORMAT),
     "comparison_eligible": ("const", False),
     "evaluator": {
         "harness_sha256": "hex",
         "context_needs_sha256": "hex",
+        "case_sets_sha256": "hex",
         "version": "text",
     },
     "profile": {
@@ -383,7 +438,7 @@ SHAPE = {
         "bootstrap_seed": ("range", 0, 4_294_967_295),
         "interval_percent": ("const", 95),
         "min_families": ("const", 2),
-        "min_repetitions_above_temperature_zero": ("const", 3),
+        "min_repetitions": ("const", MIN_REPETITIONS),
         "budget_points": ("const", list(BUDGET_POINTS)),
         "case_set": null({"name": "set", "case_ids": unique("case", 1)}),
     },
@@ -393,7 +448,7 @@ SHAPE = {
             "title": "short",
             "reviewed": "bool",
             "sha256": "hex",
-            "weights_percent": {name: "weight" for name in CATEGORIES},
+            "weights_percent": {name: "weight" for name in WEIGHTED},
         },
         1,
     ),
@@ -414,6 +469,15 @@ SHAPE = {
             "not_ranked": items("pool"),
         }
     ),
+    "differences": items(
+        {
+            "configuration": GROUP,
+            "case_ids": items("case", 1),
+            "first": "pool",
+            "second": "pool",
+            **PAIRED,
+        }
+    ),
     "comparisons": items(
         {
             "first": "hex",
@@ -424,33 +488,7 @@ SHAPE = {
             "case_ids": unique("case", 1),
             "first_flags": unique(enum(*FLAGS)),
             "second_flags": unique(enum(*FLAGS)),
-            "categories": per_category(
-                {
-                    "families": "positive",
-                    "paired_families": "count",
-                    "unpaired_families": "count",
-                    "delta": null("difference"),
-                    "interval": INTERVAL,
-                    "first_better": "count",
-                    "second_better": "count",
-                    "ties": "count",
-                    "first_censored": "count",
-                    "second_censored": "count",
-                    "cases": items(
-                        {
-                            "case_id": "case",
-                            "first_rate": "share",
-                            "second_rate": "share",
-                            "difference": "difference",
-                        }
-                    ),
-                }
-            ),
-            "overall": {
-                "complete": "bool",
-                "points": null("points_difference"),
-                "interval": INTERVAL,
-            },
+            **PAIRED,
         }
     ),
     "pareto": items(
@@ -490,8 +528,9 @@ def _fail() -> None:
     raise RecordError("Evaluation record does not have its documented shape")
 
 
-# An evaluation of another format is never read; `werkbank compare` writes it
-# again from its runs in this build's format.
+# An evaluation of another format is never read: an earlier one pooled and
+# evaluated by other rules, so its values would read as this build's.
+# `werkbank compare` writes it again from its runs in this build's format.
 OTHER_FORMAT = (
     f"The evaluation has another format than this build's {EVALUATION_FORMAT};"
     " write it again from its runs with werkbank compare"
@@ -617,6 +656,7 @@ def check_consistency(record: dict[str, Any]) -> None:
             item["run_id"] for item in record["inputs"] if item["pool"] == key
         ) or entry["repetitions"] != len(entry["runs"]):
             _inconsistent()
+        _check_instances(entry)
     if {item["pool"] for item in record["inputs"]} != set(pools):
         _inconsistent()
     try:
@@ -639,19 +679,25 @@ def check_consistency(record: dict[str, Any]) -> None:
         _check_flags(entry)
         _check_reasoning(entry)
         scores = entry["scores"]
-        # Every evaluated section exists exactly for an evaluated pool.
+        try:
+            module = module_of(entry["case_ids"])
+        except (KeyError, ValueError):
+            _inconsistent()
+        # Every evaluated section exists exactly for an evaluated pool; a
+        # module's pool has no scores in any case.
+        if entry["module"] != module or any(
+            (entry[name] is None) == (entry["evaluable"] and module is None)
+            for name in ("scores", "rescores")
+        ):
+            _inconsistent()
         if any(
             (entry[name] is None) == entry["evaluable"]
-            for name in (
-                "scores",
-                "rescores",
-                "efficiency",
-                "budget_curve",
-                "partial_credit",
-            )
+            for name in ("efficiency", "budget_curve", "partial_credit")
         ):
             _inconsistent()
         _check_cases(entry)
+        if module is not None and entry["evaluable"]:
+            _check_module_credit(entry, module)
         if scores is None:
             continue
         _check_partial(entry["partial_credit"], scores, standard)
@@ -685,11 +731,15 @@ def check_consistency(record: dict[str, Any]) -> None:
             {"profile": weights.STANDARD, **scores["overall"]["points"]}
         ):
             _inconsistent()
+    # A module's pool is never paired, ranked or placed.
+    scored = {key for key, entry in pools.items() if entry["module"] is None}
     for item in record["comparisons"]:
-        if not {item["first"], item["second"]} <= set(pools) or not (
+        if not {item["first"], item["second"]} <= scored or not (
             item["first"] < item["second"]
         ):
             _inconsistent()
+        _check_paired(item)
+    _check_differences(record, pools)
     for section, key in (("separability", "ranking"), ("pareto", "placed")):
         for item in record[section]:
             named = {row["pool"] for row in item[key]}
@@ -698,8 +748,73 @@ def check_consistency(record: dict[str, Any]) -> None:
                 if section == "separability"
                 else [row["pool"] for row in item["not_placed"]]
             )
-            if not named <= set(pools):
+            if not named <= scored:
                 _inconsistent()
+
+
+def _check_paired(item: dict[str, Any]) -> None:
+    """A pair's or a difference's counts add up: each category's case wins
+    over its paired families, the overall wins over the categories, and a
+    share above 0 exactly beside an interval."""
+    rows = item["categories"].values()
+    wins = ("first_better", "second_better", "ties")
+    overall = item["overall"]
+    if any(
+        sum(row[key] for key in wins) != row["paired_families"]
+        or row["paired_families"] + row["unpaired_families"] != row["families"]
+        or (row["interval"] is None) != (row["share_above_zero"] is None)
+        for row in rows
+    ) or (overall["interval"] is None) != (overall["share_above_zero"] is None):
+        _inconsistent()
+    if any(overall[key] != sum(row[key] for row in rows) for key in wins):
+        _inconsistent()
+
+
+def _check_differences(record: dict[str, Any], pools: dict[str, Any]) -> None:
+    """Every two evaluated pools of one ranking group have exactly one
+    difference, in the group's order, the first ranked first, with overall
+    points only on a scored case set."""
+    expected = []
+    for _, case_ids, members in comparison.groups(record["pools"]):
+        ranked = sorted(
+            (entry for entry in members if entry["scores"] is not None),
+            key=comparison.rank_order,
+        )
+        expected += [
+            (list(case_ids), first["key"], second["key"])
+            for index, first in enumerate(ranked)
+            for second in ranked[index + 1 :]
+        ]
+    found = [
+        (item["case_ids"], item["first"], item["second"])
+        for item in record["differences"]
+    ]
+    if found != expected:
+        _inconsistent()
+    for item in record["differences"]:
+        first = pools[item["first"]]
+        if item["configuration"] != comparison.group_configuration(first):
+            _inconsistent()
+        if scored_set(item["case_ids"]) is None and (
+            item["overall"]["points"] is not None
+        ):
+            _inconsistent()
+        _check_paired(item)
+
+
+def _check_instances(entry: dict[str, Any]) -> None:
+    """One seed and one instance value per run; the runs of an entry with a
+    given instance value share that value. The repetition rule is asked of
+    every pool, whatever its sampling, and never of such an entry."""
+    runs = len(entry["runs"])
+    if len(entry["seeds"]) != runs or len(entry["instances"]) != runs:
+        _inconsistent()
+    given = "given_instance" in entry["flags"]
+    if given and len(set(entry["instances"])) != 1:
+        _inconsistent()
+    few = not given and runs < MIN_REPETITIONS
+    if few != ("too_few_repetitions" in entry["flags"]):
+        _inconsistent()
 
 
 def _check_flags(entry: dict[str, Any]) -> None:
@@ -801,11 +916,29 @@ def _check_partial(
     overall = credit["overall"]
     for bound in ("lower", "upper"):
         total = sum(standard[k] * categories[k][bound] for k in standard)
-        if not _close(total, overall[bound]):
+        if overall[bound] is None or not _close(total, overall[bound]):
             _inconsistent()
     complete = all(item["score"] is not None for item in categories.values())
     if overall["score"] != (overall["lower"] if complete else None):
         _inconsistent()
+
+
+def _check_module_credit(entry: dict[str, Any], module: str) -> None:
+    """A module's pool: its credit has the module's category alone, over the
+    pool's own cases, and overall its subgoal fulfilment with no points."""
+    credit = entry["partial_credit"]
+    categories = credit["categories"]
+    if list(categories) != [module]:
+        _inconsistent()
+    item, overall = categories[module], credit["overall"]
+    if (
+        item["lower"] > item["upper"] + 1e-9
+        or item["score"] not in (None, item["lower"])
+        or (overall["lower"], overall["upper"], overall["score"]) != (None, None, None)
+        or overall["fulfilment"] != item["fulfilment"]
+    ):
+        _inconsistent()
+    _check_fulfilment(entry, {module: 1})
 
 
 def _check_fulfilment(entry: dict[str, Any], standard: dict[str, int]) -> None:
@@ -867,13 +1000,17 @@ def _files(root: Path) -> dict[str, bytes]:
 
 def this_build(record: dict[str, Any]) -> bool:
     """Whether this build wrote the evaluation: the same harness, the same
-    measured context needs and the same weight profiles, the standard one and
-    every reviewed one it ships (the needs and the profiles are outside the
-    harness digest)."""
+    measured context needs, case sets and profile, and the same weight
+    profiles, the standard one and every reviewed one it ships (the needs,
+    the sets, the profile and the weight profiles are data outside the
+    harness digest, so an evaluation written before they changed is written
+    again from the same runs)."""
     evaluator = record["evaluator"]
     if (
         evaluator["harness_sha256"] != harness_digest()
         or evaluator["context_needs_sha256"] != context_needs_sha256()
+        or evaluator["case_sets_sha256"] != case_sets_sha256()
+        or record["profile"]["design_profile_sha256"] != design_profile_sha256()
     ):
         return False
     applied = record["weight_profiles"]
@@ -948,6 +1085,9 @@ def check_evaluation(
         weight_profiles=record["weight_profiles"],
         case_set=None if case_set is None else case_set["name"],
     )
+    # The version number is outside the harness digest: a patch release keeps
+    # the build, and the evaluation keeps the number it was written with.
+    expected["evaluator"]["version"] = record["evaluator"]["version"]
     if canonical(expected) != canonical(body):
         raise RecordError("The evaluation differs from its sources")
     return record, True

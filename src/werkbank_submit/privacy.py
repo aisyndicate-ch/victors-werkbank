@@ -282,6 +282,7 @@ def identifiers() -> list[str]:
     )
     found = _keys(json.loads(sample))
     found += [texts.SUBMISSION_FORMAT, texts.QUESTIONS_FORMAT, texts.CONSENT_FORMAT]
+    found += [texts.LEADERBOARD_CONSENT_FORMAT]
     found += [choice for _, _, choices in texts.QUESTIONS for choice, _ in choices]
     found += [archive.ENVELOPE, *archive.TOP, export.INDEX, export.ARCHIVE]
     found += [writer.RESULT_FORMAT, writer.PAGE, writer.RESULT, *RESULT_FIELDS]

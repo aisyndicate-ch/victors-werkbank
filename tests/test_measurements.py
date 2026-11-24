@@ -18,6 +18,7 @@ from recorder import record_run, segments
 from scripted import Scripted, Streamed, reply
 from test_replay_grade import script
 
+from victors_werkbank.agent import measurements
 from victors_werkbank.agent.episode import HARBOR_CONTRACT
 from victors_werkbank.agent.loop import TOOL_CALLS_PER_RESPONSE, result_record
 from victors_werkbank.agent.measurements import (
@@ -29,7 +30,6 @@ from victors_werkbank.agent.measurements import (
     check_journal,
     has_token,
     identity_sampling,
-    needs_repetitions,
     reasoning_seen,
     request_record,
     sampling_text,
@@ -418,17 +418,16 @@ class Units(unittest.TestCase):
         )
 
     def test_template_variables_are_no_sampler_setting(self):
-        # The sampling still reads "server default" and needs repetitions; the
-        # variables are shown on a line of their own.
+        # The sampling still reads "server default"; the variables are shown
+        # on a line of their own.
         variables = {"enable_thinking": False}
-        for value, default, repeated in [
-            ({"chat_template_kwargs": variables}, True, True),
-            ({"seed": 2, "chat_template_kwargs": variables}, True, True),
-            ({"temperature": 0, "chat_template_kwargs": variables}, False, False),
+        for value, default in [
+            ({"chat_template_kwargs": variables}, True),
+            ({"seed": 2, "chat_template_kwargs": variables}, True),
+            ({"temperature": 0, "chat_template_kwargs": variables}, False),
         ]:
             with self.subTest(value=value):
                 self.assertIs(server_default(value), default)
-                self.assertIs(needs_repetitions(value), repeated)
         self.assertEqual(
             sampling_text({"chat_template_kwargs": variables}), "server default"
         )
@@ -492,22 +491,24 @@ class Units(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertIs(reasoning_seen(value), seen)
 
-    def test_the_server_default_counts_like_a_temperature_above_zero(self):
-        # Only a sent temperature 0 makes one run evaluable; the server's
-        # default, with or without a seed or other settings, needs repetitions.
-        for value, default, repeated in [
-            ({}, True, True),
-            ({"seed": 1}, True, True),
-            ({"top_p": 0.9}, False, True),
-            ({"top_k": 20, "seed": 3}, False, True),
-            ({"temperature": 0.6}, False, True),
-            ({"temperature": 0}, False, False),
-            ({"temperature": 0.0, "top_k": 20}, False, False),
-            ({"temperature": 0, "seed": 5}, False, False),
+    def test_the_server_default_is_no_sampler_setting_sent(self):
+        # A seed alone sets no sampler; any sampler setting is no default.
+        for value, default in [
+            ({}, True),
+            ({"seed": 1}, True),
+            ({"top_p": 0.9}, False),
+            ({"top_k": 20, "seed": 3}, False),
+            ({"temperature": 0.6}, False),
+            ({"temperature": 0}, False),
+            ({"temperature": 0.0, "top_k": 20}, False),
+            ({"temperature": 0, "seed": 5}, False),
         ]:
             with self.subTest(value=value):
                 self.assertIs(server_default(value), default)
-                self.assertIs(needs_repetitions(value), repeated)
+        # Scores need three runs whatever the sampling: no setting, not even
+        # temperature 0, is an exception to it.
+        self.assertEqual(measurements.MIN_REPETITIONS, 3)
+        self.assertFalse(hasattr(measurements, "needs_repetitions"))
         self.assertEqual(sampling_text({}), "server default")
         self.assertEqual(sampling_text({"seed": 7}), "server default, seed 7")
         self.assertEqual(

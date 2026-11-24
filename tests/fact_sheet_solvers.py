@@ -8,8 +8,7 @@ publishes a fact only when no reply still to come can change it: first a fact
 that releases a reply another fact waits for, then, while that reply is on its
 way, a fact that carries it, and it reads the inbox before each decision. Each
 belief flag replaces one rule or the publication order by a plausible wrong
-reading (the shortcut audit in the case contract of R02). Nothing here imports the case
-module's fixture or expected table."""
+reading. Nothing here imports the case module's fixture or expected table."""
 
 from collections import Counter
 from typing import Any
@@ -19,6 +18,12 @@ BELIEFS = (
     "all_open",
     # A contradiction in one tier goes to the source listed first.
     "tie_to_first",
+    # A contradiction in one tier goes to the source whose name comes first
+    # in the alphabet.
+    "tie_to_alphabetical",
+    # The standing claim with the highest record number decides, read as the
+    # newest.
+    "number_wins",
     # The newest standing claim decides.
     "newest_wins",
     # The value most records give decides, repeats included.
@@ -68,6 +73,11 @@ ORDERS = (
 )
 
 
+def number(record: str) -> int:
+    """The number of a record ID, its digits after the prefix."""
+    return int(record.split("-")[1])
+
+
 def rows(table: dict[str, Any]) -> list[dict[str, Any]]:
     return [dict(zip(table["columns"], row, strict=True)) for row in table["rows"]]
 
@@ -83,22 +93,25 @@ class Desk:
         self.classes = {row["fact"]: row["class"] for row in rows(request)}
         self.facts = list(self.classes)
         self.records = rows(call("read", {"resource": "records"}))
-        self.inbox: list[dict[str, Any]] = []
         self.heard: set[str] = set()
         # The sources whose reply the last publication released.
         self.on_the_way: set[str] = set()
         self.sheet: dict[str, str] = {}
+        self.inbox = []
+
+    @property
+    def inbox(self) -> list[dict[str, Any]]:
+        return self._inbox
+
+    @inbox.setter
+    def inbox(self, inbox: list[dict[str, Any]]) -> None:
+        # The file and its index follow the inbox as last read.
+        self._inbox = inbox
+        self.file = [*self.records, *inbox]
+        self.by_id = {row["record"]: row for row in self.file}
 
     def refresh(self) -> None:
         self.inbox = rows(self.call("read", {"resource": "inbox"}))
-
-    @property
-    def file(self) -> list[dict[str, Any]]:
-        return [*self.records, *self.inbox]
-
-    @property
-    def by_id(self) -> dict[str, dict[str, Any]]:
-        return {row["record"]: row for row in self.file}
 
     def repeats(self, row: dict[str, Any]) -> bool:
         origin = self.by_id.get(row["basis"])
@@ -149,6 +162,8 @@ class Desk:
         deciding = [r for r in claims if self.tier_of(fact, r["source"]) == tier]
         if "newest_wins" in self.beliefs:
             deciding = [claims[-1]]
+        if "number_wins" in self.beliefs:
+            deciding = [max(claims, key=lambda row: number(row["record"]))]
         if "majority_wins" in self.beliefs:
             counts = Counter(
                 row["value"]
@@ -161,7 +176,13 @@ class Desk:
         if "all_open" in self.beliefs and len({r["value"] for r in claims}) > 1:
             deciding, values = claims, {"a", "b"}
         if len(values) > 1 and "tie_to_first" in self.beliefs:
-            deciding, values = deciding[:1], {deciding[0]["value"]}
+            tiers = self.policy["ranking"][self.classes[fact]]
+            listed = [source for tier in tiers for source in tier]
+            first = min(deciding, key=lambda row: listed.index(row["source"]))
+            deciding, values = [first], {first["value"]}
+        if len(values) > 1 and "tie_to_alphabetical" in self.beliefs:
+            first = min(deciding, key=lambda row: row["source"])
+            deciding, values = [first], {first["value"]}
         if len(values) == 1:
             status, value = "settled", deciding[0]["value"]
         else:

@@ -1,0 +1,6 @@
+{
+  "case_id": "MT04",
+  "branch_id": "default",
+  "executor": "host",
+  "grading": "replay"
+}

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:werkbank:run-record:0.2.0",
-  "title": "Run record (run.json, run contract harbor-run-v4)",
+  "title": "Run record (run.json, run contract harbor-run-v6)",
   "description": "Written exclusively last: case results (security cases aggregate both episodes) and the digests of the plan and of every episode record. Never comparison eligible; no core score.",
   "type": "object",
   "properties": {
@@ -9,7 +9,7 @@
       "const": "werkbank-run-v3"
     },
     "run_contract_version": {
-      "const": "harbor-run-v4"
+      "const": "harbor-run-v6"
     },
     "comparison_eligible": {
       "const": false

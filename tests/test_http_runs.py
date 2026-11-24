@@ -3,7 +3,7 @@
 `IsolatedEndpoint` (worker process per request, real transport and SSE
 assembly) against a scripted OpenAI-compatible fake, through the Harbor-free
 orchestration of `tests/local_run.py` into a real run directory (`plan.json`,
-`episodes/<name>/`, `run.json`, contract harbor-run-v4), then the CLI's offline
+`episodes/<name>/`, `run.json`, contract harbor-run-v6), then the CLI's offline
 `validate` and `report` on it. Host cases only; code cases run in containers
 (`test_harbor_adapter`). Nothing here contacts a model."""
 
@@ -31,7 +31,7 @@ from victors_werkbank.agent.transport import (
 )
 from victors_werkbank.cli import _exit_code, main
 from victors_werkbank.integration.tasks import HOST_CASES
-from victors_werkbank.registry import CASES
+from victors_werkbank.registry import CASES, module_cases
 from victors_werkbank.serving import ENGINE_SETTINGS
 
 MODEL = "offline-fake"
@@ -52,9 +52,9 @@ GOLD_REQUESTS = {
     "A13": 12,
     "S02": 10,
     "M04": 1,
-    "S06": 8,
+    "S06": 10,
     "L05": 9,
-    "M03": 3,
+    "M03": 5,
     "R03": 7,
     "R04": 13,
     "R06": 33,
@@ -63,10 +63,31 @@ GOLD_REQUESTS = {
     "A03": 24,
     "L01": 7,
     "L02": 20,
-    "S03": 25,
+    "S03": 27,
     "M05": 1,
     "R02": 18,
+    "A17": 5,
+    "A18": 11,
+    "S07": 8,
+    "S08": 22,
+    "L07": 7,
+    "L08": 2,
+    "R07": 11,
+    "M06": 1,
+    "MT01": 6,
+    "MT02": 16,
+    "MT03": 15,
+    "MT04": 39,
+    "MT05": 21,
+    "D01": 6,
+    "D02": 42,
+    "D03": 17,
+    "D04": 16,
+    "D05": 11,
 }
+# A run holds scored cases alone or a module's cases alone.
+SCORED_HOST = tuple(cid for cid in HOST_CASES if cid not in module_cases())
+MODULE_HOST = tuple(cid for cid in HOST_CASES if cid in module_cases())
 M02_PROMPT = "Solve these three"
 A15_PROMPT = "Record the arrival"
 A10_PROMPT = "Close March for the purchase orders"
@@ -159,8 +180,9 @@ class Checks(unittest.TestCase):
 
 
 class AllHostCases(Checks):
-    """Every host case's scripted gold over real HTTP passes (code cases
-    run only in containers)."""
+    """Every scored host case's scripted gold over real HTTP passes in one run
+    (code cases run only in containers, a module's cases in a run of their
+    own: `ModuleHostCases`)."""
 
     @classmethod
     def setUpClass(cls):
@@ -170,7 +192,7 @@ class AllHostCases(Checks):
         Gold.reset()
         with serve(Gold) as url:
             cls.record = local_run(
-                endpoint(url), cls.root, HOST_CASES, progress=cls.notices.append
+                endpoint(url), cls.root, SCORED_HOST, progress=cls.notices.append
             )
         cls.requests, cls.probes = Gold.requests, Gold.probes
         cls.sampling = Gold.sampling
@@ -181,24 +203,24 @@ class AllHostCases(Checks):
 
     def test_every_host_case_passes_with_its_pinned_request_count(self):
         self.assertEqual(set(GOLD_REQUESTS), set(HOST_CASES))
-        self.assertEqual(statuses(self.record), dict.fromkeys(HOST_CASES, "passed"))
-        counted = dict.fromkeys(HOST_CASES, 0)
+        self.assertEqual(statuses(self.record), dict.fromkeys(SCORED_HOST, "passed"))
+        counted = dict.fromkeys(SCORED_HOST, 0)
         for episode in episode_records(self.root):
             self.assertEqual(episode["grade"], "graded")
             counted[episode["case_id"]] += len(episode["result"]["requests"])
-        self.assertEqual(counted, GOLD_REQUESTS)
-        self.assertEqual(self.requests, sum(GOLD_REQUESTS.values()))
-        self.assertEqual(self.requests, 426)
+        self.assertEqual(counted, {cid: GOLD_REQUESTS[cid] for cid in SCORED_HOST})
+        self.assertEqual(self.requests, sum(counted.values()))
+        self.assertEqual(self.requests, 596)
         self.assertEqual(self.sampling, [{"temperature": 0}] * self.requests)
         self.assertEqual(
             [(n["case_id"], n["event"]) for n in self.notices if n["event"] == "end"],
-            [(cid, "end") for cid in HOST_CASES for _ in CASES[cid].branches],
+            [(cid, "end") for cid in SCORED_HOST for _ in CASES[cid].branches],
         )
 
     def test_records_carry_the_contract_budgets_and_no_score(self):
         plan = read(self.root / "plan.json")
-        self.assertEqual(self.record["run_contract_version"], "harbor-run-v4")
-        self.assertEqual(plan["run_contract_version"], "harbor-run-v4")
+        self.assertEqual(self.record["run_contract_version"], "harbor-run-v6")
+        self.assertEqual(plan["run_contract_version"], "harbor-run-v6")
         self.assertEqual(self.record["model_id"], MODEL)
         self.assertEqual(plan["max_tokens_per_call"], 65536)
         self.assertEqual(len(plan["harness_sha256"]), 64)
@@ -206,7 +228,7 @@ class AllHostCases(Checks):
         # 262,144 tokens per episode; a security case runs two episodes.
         self.assertEqual(
             [row["case_id"] for row in plan["episodes"]],
-            [cid for cid in HOST_CASES for _ in CASES[cid].branches],
+            [cid for cid in SCORED_HOST for _ in CASES[cid].branches],
         )
         self.assertTrue(
             all(row["lifecycle"]["output_tokens"] == 262144 for row in plan["episodes"])
@@ -249,7 +271,7 @@ class AllHostCases(Checks):
                 self.assertNotIn(local_gpu.TOOL.encode(), data, path)
 
     def test_validate_and_report_accept_the_run(self):
-        self.assert_valid(self.root, dict.fromkeys(HOST_CASES, "passed"))
+        self.assert_valid(self.root, dict.fromkeys(SCORED_HOST, "passed"))
         self.assertEqual(_exit_code(self.record["results"]), 0)
         target = Path(self.temp.name) / "rendered"
         shutil.copytree(self.root, target)
@@ -265,7 +287,7 @@ class AllHostCases(Checks):
         )
         self.assertNotIn("INCOMPLETE", markdown)
         self.assertNotIn("never pooled", markdown)
-        for cid in HOST_CASES:
+        for cid in SCORED_HOST:
             self.assertIn(f"| {cid} |", markdown)
         # Every case is solved.
         solved = [r["case_id"] for r in self.record["results"]]
@@ -276,6 +298,27 @@ class AllHostCases(Checks):
         )
         # A rendered report is never overwritten.
         self.assertEqual(cli("report", str(target))[0], 2)
+
+
+class ModuleHostCases(Checks):
+    """Every host case of a module (the German module) passes over real HTTP
+    in a run of its own, with its pinned request count."""
+
+    def test_every_module_host_case_passes_in_its_own_run(self):
+        self.assertEqual(
+            set(MODULE_HOST), {cid for cid in HOST_CASES if cid in module_cases()}
+        )
+        Gold.reset()
+        with tempfile.TemporaryDirectory() as temporary, serve(Gold) as url:
+            root = Path(temporary) / "run"
+            record = local_run(endpoint(url), root, MODULE_HOST)
+            self.assert_valid(root, dict.fromkeys(MODULE_HOST, "passed"))
+            counted = dict.fromkeys(MODULE_HOST, 0)
+            for episode in episode_records(root):
+                counted[episode["case_id"]] += len(episode["result"]["requests"])
+        self.assertEqual(statuses(record), dict.fromkeys(MODULE_HOST, "passed"))
+        self.assertEqual(counted, {cid: GOLD_REQUESTS[cid] for cid in MODULE_HOST})
+        self.assertEqual(Gold.requests, sum(counted.values()))
 
 
 class ServingHTTP(Checks):
@@ -334,7 +377,7 @@ class ServingHTTP(Checks):
                 for name in ("first", "other", "flagless")
             }
             self.assertIn(
-                "- Sampling: server default, seed 1; needs at least three repetitions\n",
+                "- Sampling: server default, seed 1\n",
                 reports["first"],
             )
             self.assertIn(
@@ -497,14 +540,21 @@ class ServingHTTP(Checks):
                 3,
             )
             for name, line in [
-                ("default", "server default; needs at least three repetitions"),
-                ("seeded", "server default, seed 7; needs at least three repetitions"),
-                ("partial", '`{"top_p": 0.9}`; needs at least three repetitions'),
-                ("greedy", '`{"temperature": 0}`\n'),
+                ("default", "server default"),
+                ("seeded", "server default, seed 7"),
+                ("partial", '`{"top_p": 0.9}`'),
+                ("greedy", '`{"temperature": 0}`'),
             ]:
                 with self.subTest(run=name):
                     self.assert_valid(root / name, {"A06": "passed"})
-                    self.assertIn(f"- Sampling: {line}", self.render(root / name))
+                    # Every run report states the repetition rule, the one of
+                    # a run at temperature 0 too.
+                    self.assertIn(
+                        f"- Sampling: {line}\n- Repetitions: one run has no score;"
+                        " a pool needs at least 3 runs of one setup, at"
+                        " temperature 0 too (`werkbank compare`)\n",
+                        self.render(root / name),
+                    )
 
     def test_a_hardware_label_reaches_the_plan_and_the_identity(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -11,8 +11,9 @@ from .journal import ByteBudget, JournalError
 # fixed-form source IDs each and a region of at most 16 characters (6-byte
 # escapes in canonical ASCII JSON), about 3 KB in the worst case
 # (`tests/test_snapshots.py`). C04 escapes three and C07 two
-# 64 KiB source files in an ASCII JSON bundle, C01 its one 16 KiB module and
-# C10 its three; single-file S04 stays 64 KiB.
+# 64 KiB source files in an ASCII JSON bundle, C01, C11 and C12 their one
+# 16 KiB module and C10 its three; single-file S04 and C13's one 8 KiB module
+# stay 64 KiB.
 SNAPSHOT_LIMITS = {
     "L03": 64 * 1024,
     "C04": 2 * 1024 * 1024,
@@ -22,6 +23,9 @@ SNAPSHOT_LIMITS = {
     "C01": 128 * 1024,
     "C09": 1024 * 1024,
     "C10": 512 * 1024,
+    "C11": 128 * 1024,
+    "C12": 128 * 1024,
+    "C13": 64 * 1024,
 }
 
 

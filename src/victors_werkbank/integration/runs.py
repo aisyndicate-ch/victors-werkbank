@@ -1,4 +1,4 @@
-"""The run's orchestration, without Harbor imports (run contract `harbor-run-v4`).
+"""The run's orchestration, without Harbor imports (run contract `harbor-run-v6`).
 
 `open_run` creates the output, reads the endpoint fingerprint, materializes the
 task packages and writes the plan; `execute` runs every planned episode as one
@@ -185,7 +185,9 @@ def open_run(
     digests = {}
     for case_id in admission.case_ids:
         for branch_id in CASES[case_id].branches:
-            task = materialize(output / TASKS_DIR, case_id, branch_id, image)
+            task = materialize(
+                output / TASKS_DIR, case_id, branch_id, image, admission.instance
+            )
             digests[task.name] = tree_sha256(task)
     rows = plan_rows(admission.case_ids, digests)
     plan = {
@@ -195,6 +197,10 @@ def open_run(
         "run_id": run_id,
         "model_id": endpoint.model,
         "case_ids": list(admission.case_ids),
+        "instance": {
+            "value": admission.instance,
+            "source": "given" if admission.instance_given else "drawn",
+        },
         "image": image,
         "harbor": harbor,
         "sampling": admission.sampling,
@@ -286,6 +292,7 @@ def run_planned(
             streaming=run.admission.streaming,
             executor=None if executor is None else (lambda: executor),
             deferred=executor is not None,
+            instance=run.admission.instance,
         )
         run.sequence = journal.next_sequence
     manifest = episode_manifest(
